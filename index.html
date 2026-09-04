@@ -67,6 +67,17 @@
       font-family: monospace;
       font-size: 12px;
     }
+    .wallet-tag {
+      display: inline-block;
+      background: #1e293b;
+      border: 1px solid #0284c7;
+      color: #38bdf8;
+      padding: 3px 8px;
+      border-radius: 4px;
+      font-family: monospace;
+      font-size: 13px;
+      margin-bottom: 8px;
+    }
   </style>
 </head>
 <body>
@@ -79,8 +90,12 @@
     <button id="clearBtn" class="danger">Wipe Database</button>
   </div>
 
-  <h3>Tracked Targets</h3>
-  <div id="outputContainer"></div>
+<!-- Replace the existing <h3>Tracked Targets</h3> and outputContainer with this: -->
+  <h3>Known Targets (Full IPs)</h3>
+  <div id="fullIpContainer"></div>
+
+  <h3 style="margin-top: 32px; color: #a1a1aa;">Incomplete Targets (Partial IPs)</h3>
+  <div id="partialIpContainer"></div>
 
   <script src="app.js"></script>
 </body>
