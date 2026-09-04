@@ -1,5 +1,5 @@
 // --- 1. IndexedDB Initialization ---
-const DB_NAME = "TargetAggregatorDB";
+const DB_NAME = "TargetAggregatorMasterDB_v2";
 const STORE_NAME = "targets";
 let db;
 
@@ -17,137 +17,275 @@ dbReq.onsuccess = (e) => {
   renderFromDB();
 };
 
-dbReq.onerror = (e) => console.error("Database open failure:", e);
+dbReq.onerror = (e) => console.error("Database error:", e);
 
-// --- 2. Log Line Parsing & Ingestion Engine ---
+// --- 2. Regex Helpers ---
 const REGEX_IP = /\b(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\b/;
 const REGEX_MASKED_IP = /\b(?:\d{1,3}|xxx)\.(?:\d{1,3}|xxx)\.(?:\d{1,3}|xxx)\.(?:\d{1,3}|xxx)\b/;
 
-function parseLine(line) {
-  line = line.trim();
-  if (!line) return null;
-
-  const timeMatch = line.match(/^\[([^\]]+)\]/);
-  const time = timeMatch ? timeMatch[1] : null;
-
-  const ipMatch = line.match(REGEX_IP) || line.match(REGEX_MASKED_IP);
-  const explicitIp = ipMatch ? ipMatch[0] : null;
-
-  const isAccessed = line.includes("Accessed device at");
-
-  // Only extract stolen crypto wallets
-  let wallet = null;
-  if (line.includes("Stole") && line.includes("from hx")) {
-    const walletMatch = line.match(/\b(hx[a-zA-Z0-9.]+)\b/);
-    if (walletMatch) wallet = walletMatch[1];
-  }
-
-  // Extract software
-  const softMatch = line.match(/(Downloaded|Uploaded|Downloading|Uploading)\s+Lv(\d+)\s+(.+?)(?:\s+(?:from|to)\b|\.\.\.|$)/i);
-  let software = null;
-  if (softMatch) {
-    software = {
-      action: softMatch[1].toLowerCase(),
-      level: parseInt(softMatch[2], 10),
-      name: softMatch[3].trim()
-    };
-  }
-
-  return { time, explicitIp, isAccessed, wallet, software, raw: line };
+function extractIp(text) {
+  const match = text.match(REGEX_IP) || text.match(REGEX_MASKED_IP);
+  return match ? match[0] : null;
 }
 
-function associateLogs(rawLines) {
-  const parsed = rawLines.map(parseLine).filter(Boolean);
+// --- 3. Parsers ---
 
+// A. My Own Logs
+function parseMyLogs(rawLines) {
   let currentAccessedIp = null;
-  const processedEntries = [];
+  const updates = [];
 
-  // Iterate chronologically (bottom to top)
-  for (let i = parsed.length - 1; i >= 0; i--) {
-    const entry = parsed[i];
+  for (let i = rawLines.length - 1; i >= 0; i--) {
+    const line = rawLines[i].trim();
+    if (!line) continue;
 
-    // Only 'Accessed device at' sets the active machine session
-    if (entry.isAccessed && entry.explicitIp) {
-      currentAccessedIp = entry.explicitIp;
+    const timeMatch = line.match(/^\[([^\]]+)\]/);
+    const time = timeMatch ? timeMatch[1] : null;
+
+    const isAccessed = line.includes("Accessed device at");
+    const explicitIp = extractIp(line);
+
+    if (isAccessed && explicitIp) {
+      currentAccessedIp = explicitIp;
+      updates.push({ ip: explicitIp, time, raw: line });
+      continue;
     }
 
-    // Determine target: prefer the line's own explicit IP, otherwise fallback to the accessed device
-    const targetIp = entry.explicitIp || currentAccessedIp;
+    let stolenWallet = null;
+    if (line.includes("Stole") && line.includes("from hx")) {
+      const wMatch = line.match(/\b(hx[a-zA-Z0-9.]+)\b/);
+      if (wMatch) stolenWallet = wMatch[1];
+    }
 
+    const softMatch = line.match(/(Downloaded|Uploaded|Downloading|Uploading)\s+Lv(\d+)\s+(.+?)(?:\s+(?:from|to)\b|\.\.\.|$)/i);
+    let software = null;
+    let isOwned = false;
+
+    if (softMatch) {
+      const action = softMatch[1].toLowerCase();
+      software = {
+        action: action,
+        level: parseInt(softMatch[2], 10),
+        name: softMatch[3].trim()
+      };
+      isOwned = action.startsWith("download");
+    }
+
+    const targetIp = explicitIp || currentAccessedIp;
     if (targetIp) {
-      processedEntries.push({
+      updates.push({
         ip: targetIp,
-        time: entry.time,
-        // Only assign the stolen wallet if it resolves to the accessed session
-        wallet: entry.wallet && targetIp === currentAccessedIp ? entry.wallet : null,
-        software: entry.software,
-        raw: entry.raw
+        time,
+        wallet: stolenWallet && targetIp === currentAccessedIp ? stolenWallet : null,
+        software,
+        isOwnedSoftware: isOwned,
+        raw: line
       });
     }
   }
-
-  return processedEntries;
+  return updates;
 }
 
-// --- 3. Database Merging Logic ---
-// --- Updated DB Merging Logic ---
-async function mergeLogs(entries) {
+// B. Victim Logs (Strict Inbound Attacker Profiling)
+function parseVictimLogs(rawLines) {
+  const updates = [];
+
+  for (let i = rawLines.length - 1; i >= 0; i--) {
+    const line = rawLines[i].trim();
+    if (!line) continue;
+
+    const timeMatch = line.match(/^\[([^\]]+)\]/);
+    const time = timeMatch ? timeMatch[1] : null;
+
+    // Inbound: Uploaded / Downloaded by Attacker
+    const byMatch = line.match(/\bby\s+((?:(?:\d{1,3}|xxx)\.){3}(?:\d{1,3}|xxx))\b/i);
+    if (byMatch) {
+      const attackerIp = byMatch[1];
+      const softMatch = line.match(/Lv(\d+)\s+(.+?)\s+being\s+(uploaded|downloaded)\s+by/i);
+      let software = null;
+      if (softMatch) {
+        software = {
+          level: parseInt(softMatch[1], 10),
+          name: softMatch[2].trim(),
+          action: softMatch[3].toLowerCase()
+        };
+      }
+
+      updates.push({
+        ip: attackerIp,
+        time,
+        software,
+        isOwnedSoftware: true,
+        raw: line
+      });
+      continue;
+    }
+
+    // Inbound: Device accessed from Attacker
+    const accessedFromMatch = line.match(/Device accessed from\s+((?:(?:\d{1,3}|xxx)\.){3}(?:\d{1,3}|xxx))\b/i);
+    if (accessedFromMatch) {
+      updates.push({ ip: accessedFromMatch[1], time, raw: line });
+      continue;
+    }
+
+    // Discovery: Outbound Target IP
+    const outboundIp = extractIp(line);
+    if (outboundIp) {
+      updates.push({ ip: outboundIp, time, raw: line });
+    }
+  }
+  return updates;
+}
+
+// C. Victim Home Screen
+function parseHomeScreen(text) {
+  const ipMatch = text.match(/IP\s+((?:(?:\d{1,3}|xxx)\.){3}(?:\d{1,3}|xxx))/i);
+  if (!ipMatch) return null;
+  const ip = ipMatch[1];
+
+  const userMatch = text.match(/(?:DISCONNECT\s*>\s*|\n)([a-zA-Z0-9_-]+)\s*\n_\s*\n\[SHOW\]/i);
+  const username = userMatch ? userMatch[1].trim() : null;
+
+  const lvlMatch = text.match(/badge\s*LVL\s*(\d+)/i);
+  const level = lvlMatch ? parseInt(lvlMatch[1], 10) : null;
+
+  const devMatch = text.match(/DEVICE\s*([^\n]+)/i);
+  const device = devMatch ? devMatch[1].trim() : null;
+
+  const netMatch = text.match(/NETWORK\s*([^\n]+)/i);
+  const network = netMatch ? netMatch[1].trim() : null;
+
+  const fwMatch = text.match(/FIREWALL\s*Lv\.?(\d+)/i);
+  const firewall = fwMatch ? parseInt(fwMatch[1], 10) : null;
+
+  const encMatch = text.match(/ENCRYPTOR\s*Lv\.?(\d+)/i);
+  const encryptor = encMatch ? parseInt(encMatch[1], 10) : null;
+
+  return {
+    ip,
+    username,
+    level,
+    hardware: device && network ? `${device} • ${network}` : (device || network || null),
+    firewall,
+    encryptor
+  };
+}
+
+// D. Victim Software Screen
+function parseSoftwareScreen(text) {
+  // Extract user: "Hammie's installed software"
+  const userMatch = text.match(/([a-zA-Z0-9_-]+)'s installed software/i);
+  const username = userMatch ? userMatch[1].trim() : null;
+
+  // Extract slots: "0 / 2 slots"
+  const slotMatch = text.match(/(\d+\s*\/\s*\d+)\s*slots/i);
+  const slots = slotMatch ? slotMatch[1] : null;
+
+  // Extract all software items (ignoring relative diff numbers)
+  const softwareItems = {};
+  const regex = /(?:^|\n)([a-zA-Z\s]+)\n(?:[^\n]+\n)*?LVL\s*(\d+)/gi;
+  let match;
+
+  while ((match = regex.exec(text)) !== null) {
+    const rawName = match[1].trim();
+    const lvl = parseInt(match[2], 10);
+
+    // Normalize software name
+    const validNames = [
+      "Antivirus", "Spam", "Rootkit", "Firewall", "Bypasser",
+      "Password Cracker", "Password Encryptor", "Proxy", "Trace",
+      "Siphon", "Keygen"
+    ];
+
+    const matchedName = validNames.find((v) => rawName.toLowerCase().includes(v.toLowerCase()));
+    if (matchedName) {
+      softwareItems[matchedName] = { level: lvl, status: "installed" };
+    }
+  }
+
+  return { username, slots, softwareItems };
+}
+
+// --- 4. Database Ingestion & Mutations ---
+async function getRecordByIpOrUser(tx, ip, username) {
+  const store = tx.objectStore(STORE_NAME);
+
+  if (ip) {
+    const req = store.get(ip);
+    const rec = await new Promise((res) => (req.onsuccess = () => res(req.result || null)));
+    if (rec) return rec;
+  }
+
+  if (username) {
+    const all = await new Promise((res) => {
+      const req = store.getAll();
+      req.onsuccess = () => res(req.result || []);
+    });
+    const found = all.find((r) => r.username && r.username.toLowerCase() === username.toLowerCase());
+    if (found) return found;
+  }
+
+  return null;
+}
+
+function initializeRecord(ip) {
+  return {
+    ip: ip,
+    username: null,
+    level: null,
+    hardware: null,
+    firewall: null,
+    encryptor: null,
+    slots: null,
+    wallets: [],
+    downloads: {}, // Known lootable software
+    uploads: {},   // Temporary deployed payloads
+    history: []
+  };
+}
+
+async function mergeUpdates(updates) {
   const tx = db.transaction(STORE_NAME, "readwrite");
   const store = tx.objectStore(STORE_NAME);
 
-  for (const item of entries) {
-    const existing = await new Promise((resolve) => {
-      const getReq = store.get(item.ip);
-      getReq.onsuccess = () => resolve(getReq.result || null);
+  for (const item of updates) {
+    const existing = await new Promise((res) => {
+      const req = store.get(item.ip);
+      req.onsuccess = () => res(req.result || null);
     });
 
-    const record = existing || {
-      ip: item.ip,
-      wallets: [],
-      downloads: {}, // Software naturally found on the target
-      uploads: {},   // Software deployed to the target (AV-volatile)
-      history: []
-    };
+    const record = existing || initializeRecord(item.ip);
 
-    // Wallet linking
     if (item.wallet && !record.wallets.includes(item.wallet)) {
       record.wallets.push(item.wallet);
     }
 
-    // Software separation
     if (item.software) {
-      const isDownload = item.software.action.startsWith("download");
-      const targetMap = isDownload ? record.downloads : record.uploads;
-
+      const targetMap = item.isOwnedSoftware ? record.downloads : record.uploads;
       targetMap[item.software.name] = {
         level: item.software.level,
-        status: item.software.action, // 'downloaded', 'uploading', etc.
+        status: item.software.action,
         lastSeen: item.time
       };
     }
 
-    // Raw log history
-    if (!record.history.includes(item.raw)) {
+    if (item.raw && !record.history.includes(item.raw)) {
       record.history.push(item.raw);
     }
 
     store.put(record);
   }
 
-  return new Promise((resolve) => {
-    tx.oncomplete = () => resolve();
-  });
+  return new Promise((res) => (tx.oncomplete = () => res()));
 }
 
-// --- 4. Helpers: Sorting & Rendering ---
+// --- 5. Sorting & Rendering ---
 function compareIps(ipA, ipB) {
-  const octetsA = ipA.split(".");
-  const octetsB = ipB.split(".");
-
+  const octA = ipA.split(".");
+  const octB = ipB.split(".");
   for (let i = 0; i < 4; i++) {
-    const valA = octetsA[i] === "xxx" ? -1 : parseInt(octetsA[i], 10);
-    const valB = octetsB[i] === "xxx" ? -1 : parseInt(octetsB[i], 10);
-
+    const valA = octA[i] === "xxx" ? -1 : parseInt(octA[i], 10);
+    const valB = octB[i] === "xxx" ? -1 : parseInt(octB[i], 10);
     if (valA !== valB) return valA - valB;
   }
   return 0;
@@ -157,46 +295,48 @@ function createCardElement(node) {
   const card = document.createElement("div");
   card.className = "node-card";
 
+  // Header components
+  const userTag = node.username ? `<span class="user-tag">${node.username}</span>` : "";
+  const lvlTag = node.level ? `<span class="stat-badge" style="background:#1e3a8a; color:#93c5fd;">Lv.${node.level}</span>` : "";
+  const hwTag = node.hardware ? `<span class="hardware-tag">(${node.hardware})</span>` : "";
+  const fwBadge = node.firewall ? `<span class="stat-badge badge-fw">🛡️ FW: Lv${node.firewall}</span>` : "";
+  const encBadge = node.encryptor ? `<span class="stat-badge badge-enc">🔑 ENC: Lv${node.encryptor}</span>` : "";
+  const slotBadge = node.slots ? `<span class="stat-badge badge-slots">Slots: ${node.slots}</span>` : "";
+
   // Wallets
   const walletList = node.wallets && node.wallets.length > 0
     ? `<div class="wallet-container">${node.wallets.map((w) => `<span class="wallet-tag">Wallet: ${w}</span>`).join("")}</div>`
     : "";
 
-  // 1. Target Native Software (Downloads) - Highlighted in Cyan/Green
-  const downloadEntries = Object.entries(node.downloads || {});
-  const downloadTags = downloadEntries.length > 0
-    ? downloadEntries.map(([name, data]) => 
-        `<span class="tag" style="color: #4ade80; border-color: #166534; background: #052e16;">📦 ${name} Lv${data.level}</span>`
-      ).join("")
-    : "<span style='color:#71717a; font-size:12px;'>None identified</span>";
+  // Available Software
+  const downEntries = Object.entries(node.downloads || {});
+  const downTags = downEntries.length > 0
+    ? downEntries.map(([name, data]) => `<span class="tag tag-software">📦 ${name} Lv${data.level}</span>`).join("")
+    : "<span style='color:#64748b; font-size:12px;'>None identified</span>";
 
-  // 2. Deployed Software (Uploads) - Muted/Orange to denote temporary status
-  const uploadEntries = Object.entries(node.uploads || {});
-  const uploadTags = uploadEntries.length > 0
-    ? uploadEntries.map(([name, data]) => 
-        `<span class="tag" style="color: #fb923c; border-color: #9a3412; background: #271406;">▲ ${name} Lv${data.level} (${data.status})</span>`
-      ).join("")
-    : "<span style='color:#71717a; font-size:12px;'>None</span>";
+  // Uploaded Payloads
+  const upEntries = Object.entries(node.uploads || {});
+  const upTags = upEntries.length > 0
+    ? upEntries.map(([name, data]) => `<span class="tag tag-uploaded">▲ ${name} Lv${data.level}</span>`).join("")
+    : "";
 
-  // 3. History Stream
-  const historyEntries = node.history
-    .map((raw) => `<div class="history-entry">${raw}</div>`)
-    .join("");
+  // Preserved raw history
+  const historyEntries = node.history.map((r) => `<div class="history-entry">${r}</div>`).join("");
 
   card.innerHTML = `
-    <div class="node-header">${node.ip}</div>
+    <div class="node-header">
+      <span class="ip-title">${node.ip}</span>
+      ${userTag}
+      ${lvlTag}
+      ${fwBadge}
+      ${encBadge}
+      ${slotBadge}
+      ${hwTag}
+    </div>
     ${walletList}
-    <div class="node-details" style="margin-bottom: 6px;">
-      <div style="font-size: 11px; text-transform: uppercase; color: #a1a1aa; margin-bottom: 3px;">Target Software:</div>
-      ${downloadTags}
-    </div>
-    <div class="node-details">
-      <div style="font-size: 11px; text-transform: uppercase; color: #a1a1aa; margin-bottom: 3px;">Uploaded / Active:</div>
-      ${uploadTags}
-    </div>
-    <div class="history-list">
-      ${historyEntries}
-    </div>
+    <div class="software-container">${downTags}</div>
+    ${upTags ? `<div class="software-container">${upTags}</div>` : ""}
+    ${historyEntries ? `<div class="history-list">${historyEntries}</div>` : ""}
   `;
   return card;
 }
@@ -210,51 +350,121 @@ function renderFromDB() {
 
   const tx = db.transaction(STORE_NAME, "readonly");
   const store = tx.objectStore(STORE_NAME);
-  const getAllReq = store.getAll();
+  const req = store.getAll();
 
-  getAllReq.onsuccess = () => {
-    const records = getAllReq.result || [];
+  req.onsuccess = () => {
+    const records = req.result || [];
     const fullIps = [];
     const partialIps = [];
 
-    records.forEach((record) => {
-      if (record.ip.includes("xxx")) {
-        partialIps.push(record);
-      } else {
-        fullIps.push(record);
-      }
+    records.forEach((rec) => {
+      if (rec.ip.includes("xxx")) partialIps.push(rec);
+      else fullIps.push(rec);
     });
 
     fullIps.sort((a, b) => compareIps(a.ip, b.ip));
     partialIps.sort((a, b) => compareIps(a.ip, b.ip));
 
-    if (fullIps.length === 0) {
-      fullContainer.innerHTML = "<p style='color:#71717a; font-size:14px;'>No full IPs recorded.</p>";
-    } else {
-      fullIps.forEach((node) => fullContainer.appendChild(createCardElement(node)));
-    }
+    if (fullIps.length === 0) fullContainer.innerHTML = "<p style='color:#64748b; font-size:13px;'>No full targets recorded.</p>";
+    else fullIps.forEach((n) => fullContainer.appendChild(createCardElement(n)));
 
-    if (partialIps.length === 0) {
-      partialContainer.innerHTML = "<p style='color:#71717a; font-size:14px;'>No partial IPs recorded.</p>";
-    } else {
-      partialIps.forEach((node) => partialContainer.appendChild(createCardElement(node)));
-    }
+    if (partialIps.length === 0) partialContainer.innerHTML = "<p style='color:#64748b; font-size:13px;'>No partial targets recorded.</p>";
+    else partialIps.forEach((n) => partialContainer.appendChild(createCardElement(n)));
   };
 }
 
-// --- 5. Event Listeners ---
-document.getElementById("processBtn").addEventListener("click", async () => {
-  const text = document.getElementById("logInput").value;
+// --- 6. Event Handlers ---
+
+// 1. My Logs
+document.getElementById("processMyLogsBtn").addEventListener("click", async () => {
+  const text = document.getElementById("dataInput").value;
   if (!text.trim()) return;
 
-  const lines = text.split("\n");
-  const entries = associateLogs(lines);
-
-  await mergeLogs(entries);
-  document.getElementById("logInput").value = "";
+  const updates = parseMyLogs(text.split("\n"));
+  await mergeUpdates(updates);
+  document.getElementById("dataInput").value = "";
   renderFromDB();
 });
 
+// 2. Victim Logs
+document.getElementById("processVictimLogsBtn").addEventListener("click", async () => {
+  const text = document.getElementById("dataInput").value;
+  if (!text.trim()) return;
+
+  const updates = parseVictimLogs(text.split("\n"));
+  await mergeUpdates(updates);
+  document.getElementById("dataInput").value = "";
+  renderFromDB();
+});
+
+// 3. Victim Home Screen
+document.getElementById("processHomeBtn").addEventListener("click", async () => {
+  const text = document.getElementById("dataInput").value;
+  if (!text.trim()) return;
+
+  const parsed = parseHomeScreen(text);
+  if (!parsed) {
+    alert("Could not identify a valid IP address in this Home Screen dump.");
+    return;
+  }
+
+  const tx = db.transaction(STORE_NAME, "readwrite");
+  const record = (await getRecordByIpOrUser(tx, parsed.ip, parsed.username)) || initializeRecord(parsed.ip);
+
+  record.ip = parsed.ip;
+  if (parsed.username) record.username = parsed.username;
+  if (parsed.level) record.level = parsed.level;
+  if (parsed.hardware) record.hardware = parsed.hardware;
+  if (parsed.firewall) {
+    record.firewall = parsed.firewall;
+    record.downloads["Firewall"] = { level: parsed.firewall, status: "installed" };
+  }
+  if (parsed.encryptor) {
+    record.encryptor = parsed.encryptor;
+    record.downloads["Password Encryptor"] = { level: parsed.encryptor, status: "installed" };
+  }
+
+  tx.objectStore(STORE_NAME).put(record);
+  tx.oncomplete = () => {
+    document.getElementById("dataInput").value = "";
+    renderFromDB();
+  };
+});
+
+// 4. Victim Software Screen
+document.getElementById("processSoftwareBtn").addEventListener("click", async () => {
+  const text = document.getElementById("dataInput").value;
+  if (!text.trim()) return;
+
+  const parsed = parseSoftwareScreen(text);
+  if (!parsed.username) {
+    alert("Could not find the target's username in this Software dump (e.g. '<Username>'s installed software').");
+    return;
+  }
+
+  const tx = db.transaction(STORE_NAME, "readwrite");
+  const record = await getRecordByIpOrUser(tx, null, parsed.username);
+
+  if (!record) {
+    alert(`No existing record found for username '${parsed.username}'. Please process their Home Screen or logs first to associate an IP.`);
+    return;
+  }
+
+  if (parsed.slots) record.slots = parsed.slots;
+
+  // Populate all software (ignoring relative level diff numbers)
+  for (const [name, data] of Object.entries(parsed.softwareItems)) {
+    record.downloads[name] = data;
+  }
+
+  tx.objectStore(STORE_NAME).put(record);
+  tx.oncomplete = () => {
+    document.getElementById("dataInput").value = "";
+    renderFromDB();
+  };
+});
+
+// Clear DB
 document.getElementById("clearBtn").addEventListener("click", () => {
   const tx = db.transaction(STORE_NAME, "readwrite");
   tx.objectStore(STORE_NAME).clear();
