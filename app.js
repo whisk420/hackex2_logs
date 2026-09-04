@@ -1,5 +1,5 @@
 // --- 1. IndexedDB Initialization ---
-const DB_NAME = "TargetAggregatorMasterDB_v2";
+const DB_NAME = "TargetAggregatorMasterDB_v4";
 const STORE_NAME = "targets";
 let db;
 
@@ -17,9 +17,31 @@ dbReq.onsuccess = (e) => {
   renderFromDB();
 };
 
-dbReq.onerror = (e) => console.error("Database error:", e);
+dbReq.onerror = (e) => console.error("Database initialization failed:", e);
 
-// --- 2. Regex Helpers ---
+// --- 2. Software Emojis Map ---
+const SOFTWARE_ICONS = {
+  "Antivirus": "💉",
+  "Spam": "📧",
+  "Rootkit": "🪱",
+  "Firewall": "🛡️",
+  "Bypasser": "🚪",
+  "Password Cracker": "🔨",
+  "Password Encryptor": "🔑",
+  "Proxy": "🎭",
+  "Trace": "📡",
+  "Siphon": "🩸",
+  "Keygen": "⚙️"
+};
+
+function getSoftwareIcon(name) {
+  for (const [key, icon] of Object.entries(SOFTWARE_ICONS)) {
+    if (name.toLowerCase().includes(key.toLowerCase())) return icon;
+  }
+  return "📦";
+}
+
+// --- 3. Regex Helpers ---
 const REGEX_IP = /\b(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\b/;
 const REGEX_MASKED_IP = /\b(?:\d{1,3}|xxx)\.(?:\d{1,3}|xxx)\.(?:\d{1,3}|xxx)\.(?:\d{1,3}|xxx)\b/;
 
@@ -28,9 +50,7 @@ function extractIp(text) {
   return match ? match[0] : null;
 }
 
-// --- 3. Parsers ---
-
-// A. My Own Logs
+// --- 4. Parsers ---
 function parseMyLogs(rawLines) {
   let currentAccessedIp = null;
   const updates = [];
@@ -41,7 +61,6 @@ function parseMyLogs(rawLines) {
 
     const timeMatch = line.match(/^\[([^\]]+)\]/);
     const time = timeMatch ? timeMatch[1] : null;
-
     const isAccessed = line.includes("Accessed device at");
     const explicitIp = extractIp(line);
 
@@ -86,7 +105,6 @@ function parseMyLogs(rawLines) {
   return updates;
 }
 
-// B. Victim Logs (Strict Inbound Attacker Profiling)
 function parseVictimLogs(rawLines) {
   const updates = [];
 
@@ -97,7 +115,6 @@ function parseVictimLogs(rawLines) {
     const timeMatch = line.match(/^\[([^\]]+)\]/);
     const time = timeMatch ? timeMatch[1] : null;
 
-    // Inbound: Uploaded / Downloaded by Attacker
     const byMatch = line.match(/\bby\s+((?:(?:\d{1,3}|xxx)\.){3}(?:\d{1,3}|xxx))\b/i);
     if (byMatch) {
       const attackerIp = byMatch[1];
@@ -121,14 +138,12 @@ function parseVictimLogs(rawLines) {
       continue;
     }
 
-    // Inbound: Device accessed from Attacker
     const accessedFromMatch = line.match(/Device accessed from\s+((?:(?:\d{1,3}|xxx)\.){3}(?:\d{1,3}|xxx))\b/i);
     if (accessedFromMatch) {
       updates.push({ ip: accessedFromMatch[1], time, raw: line });
       continue;
     }
 
-    // Discovery: Outbound Target IP
     const outboundIp = extractIp(line);
     if (outboundIp) {
       updates.push({ ip: outboundIp, time, raw: line });
@@ -137,7 +152,6 @@ function parseVictimLogs(rawLines) {
   return updates;
 }
 
-// C. Victim Home Screen
 function parseHomeScreen(text) {
   const ipMatch = text.match(/IP\s+((?:(?:\d{1,3}|xxx)\.){3}(?:\d{1,3}|xxx))/i);
   if (!ipMatch) return null;
@@ -171,31 +185,23 @@ function parseHomeScreen(text) {
   };
 }
 
-// D. Victim Software Screen
 function parseSoftwareScreen(text) {
-  // Extract user: "Hammie's installed software"
   const userMatch = text.match(/([a-zA-Z0-9_-]+)'s installed software/i);
   const username = userMatch ? userMatch[1].trim() : null;
 
-  // Extract slots: "0 / 2 slots"
-  const slotMatch = text.match(/(\d+\s*\/\s*\d+)\s*slots/i);
-  const slots = slotMatch ? slotMatch[1] : null;
-
-  // Extract all software items (ignoring relative diff numbers)
   const softwareItems = {};
   const regex = /(?:^|\n)([a-zA-Z\s]+)\n(?:[^\n]+\n)*?LVL\s*(\d+)/gi;
   let match;
 
+  const validNames = [
+    "Antivirus", "Spam", "Rootkit", "Firewall", "Bypasser",
+    "Password Cracker", "Password Encryptor", "Proxy", "Trace",
+    "Siphon"
+  ];
+
   while ((match = regex.exec(text)) !== null) {
     const rawName = match[1].trim();
     const lvl = parseInt(match[2], 10);
-
-    // Normalize software name
-    const validNames = [
-      "Antivirus", "Spam", "Rootkit", "Firewall", "Bypasser",
-      "Password Cracker", "Password Encryptor", "Proxy", "Trace",
-      "Siphon", "Keygen"
-    ];
 
     const matchedName = validNames.find((v) => rawName.toLowerCase().includes(v.toLowerCase()));
     if (matchedName) {
@@ -203,31 +209,10 @@ function parseSoftwareScreen(text) {
     }
   }
 
-  return { username, slots, softwareItems };
+  return { username, softwareItems };
 }
 
-// --- 4. Database Ingestion & Mutations ---
-async function getRecordByIpOrUser(tx, ip, username) {
-  const store = tx.objectStore(STORE_NAME);
-
-  if (ip) {
-    const req = store.get(ip);
-    const rec = await new Promise((res) => (req.onsuccess = () => res(req.result || null)));
-    if (rec) return rec;
-  }
-
-  if (username) {
-    const all = await new Promise((res) => {
-      const req = store.getAll();
-      req.onsuccess = () => res(req.result || []);
-    });
-    const found = all.find((r) => r.username && r.username.toLowerCase() === username.toLowerCase());
-    if (found) return found;
-  }
-
-  return null;
-}
-
+// --- 5. Data Merge & Snapshot Management ---
 function initializeRecord(ip) {
   return {
     ip: ip,
@@ -236,25 +221,60 @@ function initializeRecord(ip) {
     hardware: null,
     firewall: null,
     encryptor: null,
-    slots: null,
     wallets: [],
-    downloads: {}, // Known lootable software
-    uploads: {},   // Temporary deployed payloads
+    downloads: {},
+    uploads: {},
     history: []
   };
 }
 
+function mergeTargetRecords(base, incoming) {
+  const baseIsMasked = base.ip.includes("xxx");
+  const incomingIsMasked = incoming.ip.includes("xxx");
+  const canonicalIp = (!incomingIsMasked && baseIsMasked) ? incoming.ip : base.ip;
+
+  const merged = {
+    ip: canonicalIp,
+    username: incoming.username || base.username || null,
+    level: incoming.level || base.level || null,
+    hardware: incoming.hardware || base.hardware || null,
+    firewall: incoming.firewall || base.firewall || null,
+    encryptor: incoming.encryptor || base.encryptor || null,
+    wallets: Array.from(new Set([...(base.wallets || []), ...(incoming.wallets || [])])),
+    downloads: { ...(base.downloads || {}), ...(incoming.downloads || {}) },
+    uploads: { ...(base.uploads || {}), ...(incoming.uploads || {}) },
+    history: Array.from(new Set([...(base.history || []), ...(incoming.history || [])]))
+  };
+
+  return {
+    merged,
+    oldKeyToDelete: (canonicalIp !== base.ip) ? base.ip : ((canonicalIp !== incoming.ip) ? incoming.ip : null)
+  };
+}
+
+// Single-pass batch updater without async transaction stall
 async function mergeUpdates(updates) {
-  const tx = db.transaction(STORE_NAME, "readwrite");
-  const store = tx.objectStore(STORE_NAME);
+  if (!db || updates.length === 0) return;
 
+  // Read everything first
+  const existingMap = await new Promise((resolve) => {
+    const tx = db.transaction(STORE_NAME, "readonly");
+    const req = tx.objectStore(STORE_NAME).getAll();
+    req.onsuccess = () => {
+      const map = new Map();
+      (req.result || []).forEach((r) => map.set(r.ip, r));
+      resolve(map);
+    };
+    req.onerror = () => resolve(new Map());
+  });
+
+  // Apply updates to in-memory records
   for (const item of updates) {
-    const existing = await new Promise((res) => {
-      const req = store.get(item.ip);
-      req.onsuccess = () => res(req.result || null);
-    });
-
-    const record = existing || initializeRecord(item.ip);
+    let record = existingMap.get(item.ip);
+    if (!record) {
+      record = initializeRecord(item.ip);
+      existingMap.set(item.ip, record);
+    }
 
     if (item.wallet && !record.wallets.includes(item.wallet)) {
       record.wallets.push(item.wallet);
@@ -272,14 +292,209 @@ async function mergeUpdates(updates) {
     if (item.raw && !record.history.includes(item.raw)) {
       record.history.push(item.raw);
     }
+  }
 
+  // Write batch back cleanly in one atomic transaction
+  return new Promise((resolve) => {
+    const writeTx = db.transaction(STORE_NAME, "readwrite");
+    const writeStore = writeTx.objectStore(STORE_NAME);
+    for (const record of existingMap.values()) {
+      writeStore.put(record);
+    }
+    writeTx.oncomplete = () => resolve();
+    writeTx.onerror = (e) => {
+      console.error("Write transaction error:", e);
+      resolve();
+    };
+  });
+}
+
+// Deduplication Reconciliation
+async function reconcileDatabase() {
+  if (!db) return;
+
+  const records = await new Promise((resolve) => {
+    const tx = db.transaction(STORE_NAME, "readonly");
+    const req = tx.objectStore(STORE_NAME).getAll();
+    req.onsuccess = () => resolve(req.result || []);
+    req.onerror = () => resolve([]);
+  });
+
+  if (!records || records.length < 2) return;
+
+  const toDelete = new Set();
+  const toPut = [];
+
+  for (let i = 0; i < records.length; i++) {
+    for (let j = i + 1; j < records.length; j++) {
+      const recA = records[i];
+      const recB = records[j];
+
+      if (!recA || !recB) continue;
+
+      const sharesUser = recA.username && recB.username &&
+        recA.username.toLowerCase() === recB.username.toLowerCase();
+      const sharesWallet = (recA.wallets || []).some((w) => (recB.wallets || []).includes(w));
+
+      if (sharesUser || sharesWallet) {
+        const mergeResult = mergeTargetRecords(recA, recB);
+        const finalMerged = mergeResult.merged;
+
+        toPut.push(finalMerged);
+        const obsoleteKey = (finalMerged.ip === recA.ip) ? recB.ip : recA.ip;
+        toDelete.add(obsoleteKey);
+
+        records[i] = finalMerged;
+        records.splice(j, 1);
+        j--;
+      }
+    }
+  }
+
+  if (toPut.length > 0 || toDelete.size > 0) {
+    return new Promise((resolve) => {
+      const writeTx = db.transaction(STORE_NAME, "readwrite");
+      const writeStore = writeTx.objectStore(STORE_NAME);
+
+      for (const key of toDelete) writeStore.delete(key);
+      for (const record of toPut) writeStore.put(record);
+
+      writeTx.oncomplete = () => resolve();
+      writeTx.onerror = () => resolve();
+    });
+  }
+}
+
+// Snapshot & Undo
+let previousDatabaseSnapshot = null;
+let lastPastedInputText = "";
+const undoBtn = document.getElementById("undoBtn");
+
+async function captureSnapshot() {
+  if (!db) return;
+  return new Promise((resolve) => {
+    const tx = db.transaction(STORE_NAME, "readonly");
+    const req = tx.objectStore(STORE_NAME).getAll();
+    req.onsuccess = () => {
+      previousDatabaseSnapshot = JSON.parse(JSON.stringify(req.result || []));
+      lastPastedInputText = document.getElementById("dataInput").value;
+      if (undoBtn) {
+        undoBtn.disabled = false;
+        undoBtn.style.background = "#ca8a04";
+      }
+      resolve();
+    };
+    req.onerror = () => resolve();
+  });
+}
+
+async function restoreSnapshot() {
+  if (!previousDatabaseSnapshot || !db) return;
+
+  const writeTx = db.transaction(STORE_NAME, "readwrite");
+  const store = writeTx.objectStore(STORE_NAME);
+  store.clear();
+
+  for (const record of previousDatabaseSnapshot) {
     store.put(record);
   }
 
-  return new Promise((res) => (tx.oncomplete = () => res()));
+  writeTx.oncomplete = () => {
+    document.getElementById("dataInput").value = lastPastedInputText;
+    previousDatabaseSnapshot = null;
+    if (undoBtn) {
+      undoBtn.disabled = true;
+      undoBtn.style.background = "#475569";
+    }
+    renderFromDB();
+  };
 }
 
-// --- 5. Sorting & Rendering ---
+if (undoBtn) undoBtn.addEventListener("click", restoreSnapshot);
+
+// --- 6. Card UI & Action Helpers ---
+function deleteTarget(ip, cardElement) {
+  if (!confirm(`Delete target ${ip}?`)) return;
+  const tx = db.transaction(STORE_NAME, "readwrite");
+  tx.objectStore(STORE_NAME).delete(ip);
+  tx.oncomplete = () => {
+    if (cardElement) cardElement.remove();
+  };
+}
+
+async function shareTarget(node) {
+  const lines = [`TARGET: ${node.ip}`];
+  if (node.username) lines.push(`User: ${node.username}`);
+  if (node.firewall) lines.push(`Firewall: Lv.${node.firewall}`);
+  if (node.encryptor) lines.push(`Encryptor: Lv.${node.encryptor}`);
+
+  const softwareEntries = Object.entries(node.downloads || {});
+  if (softwareEntries.length > 0) {
+    lines.push("\nSoftware:");
+    softwareEntries.forEach(([name, data]) => {
+      lines.push(`• ${name} Lv.${data.level}`);
+    });
+  }
+
+  const payload = lines.join("\n");
+  try {
+    await navigator.clipboard.writeText(payload);
+    alert(`Copied report for ${node.ip} to clipboard!`);
+  } catch (err) {
+    const ta = document.createElement("textarea");
+    ta.value = payload;
+    document.body.appendChild(ta);
+    ta.select();
+    document.execCommand("copy");
+    document.body.removeChild(ta);
+    alert(`Copied report for ${node.ip} to clipboard!`);
+  }
+}
+
+async function editTargetIp(oldIp) {
+  const newIpInput = prompt(`Enter new IP address for ${oldIp}:`, oldIp);
+  if (!newIpInput) return;
+
+  const validIp = extractIp(newIpInput.trim());
+  if (!validIp) {
+    alert("Invalid IP format entered.");
+    return;
+  }
+  if (validIp === oldIp) return;
+
+  await captureSnapshot();
+
+  const allRecords = await new Promise((resolve) => {
+    const tx = db.transaction(STORE_NAME, "readonly");
+    const req = tx.objectStore(STORE_NAME).getAll();
+    req.onsuccess = () => resolve(req.result || []);
+  });
+
+  const existing = allRecords.find((r) => r.ip === oldIp);
+  if (!existing) return;
+
+  const collision = allRecords.find((r) => r.ip === validIp);
+
+  const writeTx = db.transaction(STORE_NAME, "readwrite");
+  const store = writeTx.objectStore(STORE_NAME);
+
+  store.delete(oldIp);
+
+  if (collision) {
+    existing.ip = validIp;
+    const mergeResult = mergeTargetRecords(collision, existing);
+    store.put(mergeResult.merged);
+  } else {
+    existing.ip = validIp;
+    store.put(existing);
+  }
+
+  writeTx.oncomplete = async () => {
+    await reconcileDatabase();
+    renderFromDB();
+  };
+}
+
 function compareIps(ipA, ipB) {
   const octA = ipA.split(".");
   const octB = ipB.split(".");
@@ -295,53 +510,86 @@ function createCardElement(node) {
   const card = document.createElement("div");
   card.className = "node-card";
 
-  // Header components
   const userTag = node.username ? `<span class="user-tag">${node.username}</span>` : "";
   const lvlTag = node.level ? `<span class="stat-badge" style="background:#1e3a8a; color:#93c5fd;">Lv.${node.level}</span>` : "";
-  const hwTag = node.hardware ? `<span class="hardware-tag">(${node.hardware})</span>` : "";
   const fwBadge = node.firewall ? `<span class="stat-badge badge-fw">🛡️ FW: Lv${node.firewall}</span>` : "";
   const encBadge = node.encryptor ? `<span class="stat-badge badge-enc">🔑 ENC: Lv${node.encryptor}</span>` : "";
-  const slotBadge = node.slots ? `<span class="stat-badge badge-slots">Slots: ${node.slots}</span>` : "";
+  const hwTag = node.hardware ? `<span class="hardware-tag">(${node.hardware})</span>` : "";
 
-  // Wallets
   const walletList = node.wallets && node.wallets.length > 0
     ? `<div class="wallet-container">${node.wallets.map((w) => `<span class="wallet-tag">Wallet: ${w}</span>`).join("")}</div>`
     : "";
 
-  // Available Software
   const downEntries = Object.entries(node.downloads || {});
   const downTags = downEntries.length > 0
-    ? downEntries.map(([name, data]) => `<span class="tag tag-software">📦 ${name} Lv${data.level}</span>`).join("")
-    : "<span style='color:#64748b; font-size:12px;'>None identified</span>";
+    ? downEntries.map(([name, data]) => `
+        <div class="sw-card sw-loot">
+          <span>${getSoftwareIcon(name)} ${name}</span>
+          <strong>Lv${data.level}</strong>
+        </div>
+      `).join("")
+    : "<span style='color:#475569; font-size:12px; font-style: italic;'>No target inventory known</span>";
 
-  // Uploaded Payloads
   const upEntries = Object.entries(node.uploads || {});
   const upTags = upEntries.length > 0
-    ? upEntries.map(([name, data]) => `<span class="tag tag-uploaded">▲ ${name} Lv${data.level}</span>`).join("")
+    ? upEntries.map(([name, data]) => `
+        <div class="sw-card sw-upload">
+          <span>▲ ${name}</span>
+          <strong>Lv${data.level}</strong>
+        </div>
+      `).join("")
     : "";
 
-  // Preserved raw history
   const historyEntries = node.history.map((r) => `<div class="history-entry">${r}</div>`).join("");
 
   card.innerHTML = `
     <div class="node-header">
-      <span class="ip-title">${node.ip}</span>
-      ${userTag}
-      ${lvlTag}
-      ${fwBadge}
-      ${encBadge}
-      ${slotBadge}
-      ${hwTag}
+      <div class="node-meta">
+        <span class="ip-title">${node.ip}</span>
+        ${userTag}
+        ${lvlTag}
+        ${fwBadge}
+        ${encBadge}
+        ${hwTag}
+      </div>
+      <div class="node-actions">
+        <button class="action-btn toggle-btn">Hide</button>
+        <button class="action-btn edit-btn">Edit IP</button>
+        <button class="action-btn share-btn">Share</button>
+        <button class="action-btn del-btn">Delete</button>
+      </div>
     </div>
-    ${walletList}
-    <div class="software-container">${downTags}</div>
-    ${upTags ? `<div class="software-container">${upTags}</div>` : ""}
-    ${historyEntries ? `<div class="history-list">${historyEntries}</div>` : ""}
+
+    <div class="node-body">
+      ${walletList}
+      <div class="software-section-label">Target Software</div>
+      <div class="software-grid">${downTags}</div>
+      ${upTags ? `
+        <div class="software-section-label">Active Deployments</div>
+        <div class="software-grid">${upTags}</div>
+      ` : ""}
+      ${historyEntries ? `<div class="history-list">${historyEntries}</div>` : ""}
+    </div>
   `;
+
+  const toggleBtn = card.querySelector(".toggle-btn");
+  const bodySection = card.querySelector(".node-body");
+  toggleBtn.addEventListener("click", () => {
+    const isHidden = bodySection.style.display === "none";
+    bodySection.style.display = isHidden ? "block" : "none";
+    toggleBtn.textContent = isHidden ? "Hide" : "Expand";
+  });
+
+  card.querySelector(".edit-btn").addEventListener("click", () => editTargetIp(node.ip));
+  card.querySelector(".share-btn").addEventListener("click", () => shareTarget(node));
+  card.querySelector(".del-btn").addEventListener("click", () => deleteTarget(node.ip, card));
+
   return card;
 }
 
 function renderFromDB() {
+  if (!db) return;
+
   const fullContainer = document.getElementById("fullIpContainer");
   const partialContainer = document.getElementById("partialIpContainer");
 
@@ -365,39 +613,39 @@ function renderFromDB() {
     fullIps.sort((a, b) => compareIps(a.ip, b.ip));
     partialIps.sort((a, b) => compareIps(a.ip, b.ip));
 
-    if (fullIps.length === 0) fullContainer.innerHTML = "<p style='color:#64748b; font-size:13px;'>No full targets recorded.</p>";
+    if (fullIps.length === 0) fullContainer.innerHTML = "<p style='color:#475569; font-size:13px;'>No full targets recorded.</p>";
     else fullIps.forEach((n) => fullContainer.appendChild(createCardElement(n)));
 
-    if (partialIps.length === 0) partialContainer.innerHTML = "<p style='color:#64748b; font-size:13px;'>No partial targets recorded.</p>";
+    if (partialIps.length === 0) partialContainer.innerHTML = "<p style='color:#475569; font-size:13px;'>No partial targets recorded.</p>";
     else partialIps.forEach((n) => partialContainer.appendChild(createCardElement(n)));
   };
 }
 
-// --- 6. Event Handlers ---
-
-// 1. My Logs
+// --- 7. Event Handlers ---
 document.getElementById("processMyLogsBtn").addEventListener("click", async () => {
   const text = document.getElementById("dataInput").value;
   if (!text.trim()) return;
 
+  await captureSnapshot();
   const updates = parseMyLogs(text.split("\n"));
   await mergeUpdates(updates);
   document.getElementById("dataInput").value = "";
+  await reconcileDatabase();
   renderFromDB();
 });
 
-// 2. Victim Logs
 document.getElementById("processVictimLogsBtn").addEventListener("click", async () => {
   const text = document.getElementById("dataInput").value;
   if (!text.trim()) return;
 
+  await captureSnapshot();
   const updates = parseVictimLogs(text.split("\n"));
   await mergeUpdates(updates);
   document.getElementById("dataInput").value = "";
+  await reconcileDatabase();
   renderFromDB();
 });
 
-// 3. Victim Home Screen
 document.getElementById("processHomeBtn").addEventListener("click", async () => {
   const text = document.getElementById("dataInput").value;
   if (!text.trim()) return;
@@ -408,64 +656,93 @@ document.getElementById("processHomeBtn").addEventListener("click", async () => 
     return;
   }
 
-  const tx = db.transaction(STORE_NAME, "readwrite");
-  const record = (await getRecordByIpOrUser(tx, parsed.ip, parsed.username)) || initializeRecord(parsed.ip);
+  await captureSnapshot();
 
-  record.ip = parsed.ip;
-  if (parsed.username) record.username = parsed.username;
-  if (parsed.level) record.level = parsed.level;
-  if (parsed.hardware) record.hardware = parsed.hardware;
+  const allRecords = await new Promise((resolve) => {
+    const tx = db.transaction(STORE_NAME, "readonly");
+    const req = tx.objectStore(STORE_NAME).getAll();
+    req.onsuccess = () => resolve(req.result || []);
+  });
+
+  const existing = allRecords.find((r) => r.ip === parsed.ip || (parsed.username && r.username && r.username.toLowerCase() === parsed.username.toLowerCase()));
+
+  const incoming = initializeRecord(parsed.ip);
+  incoming.username = parsed.username;
+  incoming.level = parsed.level;
+  incoming.hardware = parsed.hardware;
   if (parsed.firewall) {
-    record.firewall = parsed.firewall;
-    record.downloads["Firewall"] = { level: parsed.firewall, status: "installed" };
+    incoming.firewall = parsed.firewall;
+    incoming.downloads["Firewall"] = { level: parsed.firewall, status: "installed" };
   }
   if (parsed.encryptor) {
-    record.encryptor = parsed.encryptor;
-    record.downloads["Password Encryptor"] = { level: parsed.encryptor, status: "installed" };
+    incoming.encryptor = parsed.encryptor;
+    incoming.downloads["Password Encryptor"] = { level: parsed.encryptor, status: "installed" };
   }
 
-  tx.objectStore(STORE_NAME).put(record);
-  tx.oncomplete = () => {
+  let finalRecord = incoming;
+  let oldKeyToDelete = null;
+
+  if (existing) {
+    const mergeResult = mergeTargetRecords(existing, incoming);
+    finalRecord = mergeResult.merged;
+    oldKeyToDelete = mergeResult.oldKeyToDelete;
+  }
+
+  const writeTx = db.transaction(STORE_NAME, "readwrite");
+  const store = writeTx.objectStore(STORE_NAME);
+
+  if (oldKeyToDelete && oldKeyToDelete !== finalRecord.ip) {
+    store.delete(oldKeyToDelete);
+  }
+  store.put(finalRecord);
+
+  writeTx.oncomplete = async () => {
     document.getElementById("dataInput").value = "";
+    await reconcileDatabase();
     renderFromDB();
   };
 });
 
-// 4. Victim Software Screen
 document.getElementById("processSoftwareBtn").addEventListener("click", async () => {
   const text = document.getElementById("dataInput").value;
   if (!text.trim()) return;
 
   const parsed = parseSoftwareScreen(text);
   if (!parsed.username) {
-    alert("Could not find the target's username in this Software dump (e.g. '<Username>'s installed software').");
+    alert("Could not find username in this Software dump.");
     return;
   }
 
-  const tx = db.transaction(STORE_NAME, "readwrite");
-  const record = await getRecordByIpOrUser(tx, null, parsed.username);
+  await captureSnapshot();
+
+  const allRecords = await new Promise((resolve) => {
+    const tx = db.transaction(STORE_NAME, "readonly");
+    const req = tx.objectStore(STORE_NAME).getAll();
+    req.onsuccess = () => resolve(req.result || []);
+  });
+
+  const record = allRecords.find((r) => r.username && r.username.toLowerCase() === parsed.username.toLowerCase());
 
   if (!record) {
-    alert(`No existing record found for username '${parsed.username}'. Please process their Home Screen or logs first to associate an IP.`);
+    alert(`No existing record found for username '${parsed.username}'. Process their Home Screen first.`);
     return;
   }
 
-  if (parsed.slots) record.slots = parsed.slots;
-
-  // Populate all software (ignoring relative level diff numbers)
   for (const [name, data] of Object.entries(parsed.softwareItems)) {
     record.downloads[name] = data;
   }
 
-  tx.objectStore(STORE_NAME).put(record);
-  tx.oncomplete = () => {
+  const writeTx = db.transaction(STORE_NAME, "readwrite");
+  writeTx.objectStore(STORE_NAME).put(record);
+
+  writeTx.oncomplete = () => {
     document.getElementById("dataInput").value = "";
     renderFromDB();
   };
 });
 
-// Clear DB
 document.getElementById("clearBtn").addEventListener("click", () => {
+  if (!confirm("Are you sure you want to wipe the entire database?")) return;
   const tx = db.transaction(STORE_NAME, "readwrite");
   tx.objectStore(STORE_NAME).clear();
   tx.oncomplete = () => renderFromDB();
