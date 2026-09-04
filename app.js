@@ -153,14 +153,26 @@ function parseVictimLogs(rawLines) {
 }
 
 function parseHomeScreen(text) {
-  const ipMatch = text.match(/IP\s+((?:(?:\d{1,3}|xxx)\.){3}(?:\d{1,3}|xxx))/i);
+  const ipMatch = text.match(/IP\s*([0-9]{1,3}(?:\.[0-9]{1,3}|\.xxx){3})/i);
   if (!ipMatch) return null;
-  const ip = ipMatch[1];
+  const ip = ipMatch[1].trim();
 
-  const userMatch = text.match(/(?:DISCONNECT\s*>\s*|\n)([a-zA-Z0-9_-]+)\s*\n_\s*\n\[SHOW\]/i);
-  const username = userMatch ? userMatch[1].trim() : null;
+  // 1. Username: The non-empty line directly after ">"
+  let username = null;
+  const afterCaretMatch = text.match(/>\s*\n+([^\n\r_]+)/i);
+  if (afterCaretMatch) {
+    username = afterCaretMatch[1].trim();
+  }
 
-  const lvlMatch = text.match(/badge\s*LVL\s*(\d+)/i);
+  // 2. Clan Tag (Optional): Captures bracketed tags like [EFN] or [SHOW]
+  const clanMatch = text.match(/\[([a-zA-Z0-9_-]{2,6})\]/i);
+  const clanTag = clanMatch ? `[${clanMatch[1]}]` : null;
+
+  // Combine clan tag with username if present
+  const fullDisplayName = clanTag && username ? `${clanTag} ${username}` : username;
+
+  // 3. Level & Stats
+  const lvlMatch = text.match(/LVL\s*(\d+)/i);
   const level = lvlMatch ? parseInt(lvlMatch[1], 10) : null;
 
   const devMatch = text.match(/DEVICE\s*([^\n]+)/i);
@@ -177,7 +189,7 @@ function parseHomeScreen(text) {
 
   return {
     ip,
-    username,
+    username: fullDisplayName,
     level,
     hardware: device && network ? `${device} • ${network}` : (device || network || null),
     firewall,
