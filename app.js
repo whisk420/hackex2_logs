@@ -157,21 +157,18 @@ function parseHomeScreen(text) {
   if (!ipMatch) return null;
   const ip = ipMatch[1].trim();
 
-  // 1. Username: The non-empty line directly after ">"
+  // 1. Clean Base Username (Line directly after ">")
   let username = null;
   const afterCaretMatch = text.match(/>\s*\n+([^\n\r_]+)/i);
   if (afterCaretMatch) {
     username = afterCaretMatch[1].trim();
   }
 
-  // 2. Clan Tag (Optional): Captures bracketed tags like [EFN] or [SHOW]
+  // 2. Clan Tag (Optional): Stored separately
   const clanMatch = text.match(/\[([a-zA-Z0-9_-]{2,6})\]/i);
-  const clanTag = clanMatch ? `[${clanMatch[1]}]` : null;
+  const clan = clanMatch ? clanMatch[1].trim() : null;
 
-  // Combine clan tag with username if present
-  const fullDisplayName = clanTag && username ? `${clanTag} ${username}` : username;
-
-  // 3. Level & Stats
+  // 3. Stats & Hardware
   const lvlMatch = text.match(/LVL\s*(\d+)/i);
   const level = lvlMatch ? parseInt(lvlMatch[1], 10) : null;
 
@@ -189,7 +186,8 @@ function parseHomeScreen(text) {
 
   return {
     ip,
-    username: fullDisplayName,
+    username,
+    clan,
     level,
     hardware: device && network ? `${device} • ${network}` : (device || network || null),
     firewall,
@@ -197,38 +195,12 @@ function parseHomeScreen(text) {
   };
 }
 
-function parseSoftwareScreen(text) {
-  const userMatch = text.match(/([a-zA-Z0-9_-]+)'s installed software/i);
-  const username = userMatch ? userMatch[1].trim() : null;
-
-  const softwareItems = {};
-  const regex = /(?:^|\n)([a-zA-Z\s]+)\n(?:[^\n]+\n)*?LVL\s*(\d+)/gi;
-  let match;
-
-  const validNames = [
-    "Antivirus", "Spam", "Rootkit", "Firewall", "Bypasser",
-    "Password Cracker", "Password Encryptor", "Proxy", "Trace",
-    "Siphon"
-  ];
-
-  while ((match = regex.exec(text)) !== null) {
-    const rawName = match[1].trim();
-    const lvl = parseInt(match[2], 10);
-
-    const matchedName = validNames.find((v) => rawName.toLowerCase().includes(v.toLowerCase()));
-    if (matchedName) {
-      softwareItems[matchedName] = { level: lvl, status: "installed" };
-    }
-  }
-
-  return { username, softwareItems };
-}
-
 // --- 5. Data Merge & Snapshot Management ---
 function initializeRecord(ip) {
   return {
     ip: ip,
     username: null,
+    clan: null,
     level: null,
     hardware: null,
     firewall: null,
@@ -248,6 +220,7 @@ function mergeTargetRecords(base, incoming) {
   const merged = {
     ip: canonicalIp,
     username: incoming.username || base.username || null,
+    clan: incoming.clan || base.clan || null,
     level: incoming.level || base.level || null,
     hardware: incoming.hardware || base.hardware || null,
     firewall: incoming.firewall || base.firewall || null,
@@ -527,6 +500,7 @@ function createCardElement(node) {
   const fwBadge = node.firewall ? `<span class="stat-badge badge-fw">🛡️ FW: Lv${node.firewall}</span>` : "";
   const encBadge = node.encryptor ? `<span class="stat-badge badge-enc">🔑 ENC: Lv${node.encryptor}</span>` : "";
   const hwTag = node.hardware ? `<span class="hardware-tag">(${node.hardware})</span>` : "";
+  const clanBadge = node.clan ? `<span class="stat-badge" style="background:#334155; color:#38bdf8; border: 1px solid #475569;">[${node.clan}]</span>` : "";
 
   const walletList = node.wallets && node.wallets.length > 0
     ? `<div class="wallet-container">${node.wallets.map((w) => `<span class="wallet-tag">Wallet: ${w}</span>`).join("")}</div>`
@@ -555,9 +529,9 @@ function createCardElement(node) {
   const historyEntries = node.history.map((r) => `<div class="history-entry">${r}</div>`).join("");
 
   card.innerHTML = `
-    <div class="node-header">
-      <div class="node-meta">
+    <div class="node-meta">
         <span class="ip-title">${node.ip}</span>
+        ${clanBadge}
         ${userTag}
         ${lvlTag}
         ${fwBadge}
