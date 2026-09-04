@@ -695,7 +695,12 @@ document.getElementById("processSoftwareBtn").addEventListener("click", async ()
 
   const parsed = parseSoftwareScreen(text);
   if (!parsed.username) {
-    alert("Could not find username in this Software dump.");
+    alert("Could not find username in this Software dump (expected '<Username>'s installed software').");
+    return;
+  }
+
+  if (Object.keys(parsed.softwareItems).length === 0) {
+    alert("Could not detect any software levels in this dump.");
     return;
   }
 
@@ -707,13 +712,16 @@ document.getElementById("processSoftwareBtn").addEventListener("click", async ()
     req.onsuccess = () => resolve(req.result || []);
   });
 
-  const record = allRecords.find((r) => r.username && r.username.toLowerCase() === parsed.username.toLowerCase());
+  // Normalized matching (case-insensitive, trimmed)
+  const targetUser = parsed.username.trim().toLowerCase();
+  const record = allRecords.find((r) => r.username && r.username.trim().toLowerCase() === targetUser);
 
   if (!record) {
-    alert(`No existing record found for username '${parsed.username}'. Process their Home Screen first.`);
+    alert(`No existing record found for username '${parsed.username}'. Please process their Home Screen first to register their IP.`);
     return;
   }
 
+  // Merge discovered software into target inventory
   for (const [name, data] of Object.entries(parsed.softwareItems)) {
     record.downloads[name] = data;
   }
