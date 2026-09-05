@@ -144,6 +144,26 @@ function parseVictimLogs(rawLines) {
       continue;
     }
 
+    // Also handle transfer lines in the "Downloading/Uploading LvN Name from/to IP" format.
+    // In a victim log the mentioned IP is the other party (the attacker), so it owns the software.
+    const transferMatch = line.match(
+      /(Downloaded|Uploaded|Downloading|Uploading)\s+Lv(\d+)\s+(.+?)\s+(?:from|to)\s+((?:(?:\d{1,3}|xxx)\.){3}(?:\d{1,3}|xxx))\b/i
+    );
+    if (transferMatch) {
+      updates.push({
+        ip: transferMatch[4],
+        time,
+        software: {
+          level: parseInt(transferMatch[2], 10),
+          name: transferMatch[3].trim(),
+          action: transferMatch[1].toLowerCase()
+        },
+        isOwnedSoftware: true,
+        raw: line
+      });
+      continue;
+    }
+
     const outboundIp = extractIp(line);
     if (outboundIp) {
       updates.push({ ip: outboundIp, time, raw: line });
