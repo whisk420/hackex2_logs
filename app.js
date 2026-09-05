@@ -569,8 +569,8 @@ async function editTargetIp(oldIp) {
 }
 
 function parseSoftwareScreen(text) {
-  // 1. Support both standard (') and curly (’) apostrophes
-  const userMatch = text.match(/([a-zA-Z0-9_-]+)['’]s installed software/i);
+  // 1. Support both standard (') and curly (’) apostrophes, and multi-word usernames containing spaces (e.g. "hack Men's installed software")
+  const userMatch = text.match(/([a-zA-Z0-9_-]+(?:[ \t]+[a-zA-Z0-9_-]+)*)['’]s installed software/i);
   const username = userMatch ? userMatch[1].trim() : null;
 
   const softwareItems = {};
