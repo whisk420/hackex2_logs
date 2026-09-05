@@ -350,7 +350,75 @@ async function reconcileDatabase() {
   }
 }
 
-// Snapshot & Undo
+// --- 2b. Change Log (Confirmation Box) ---
+const CHANGE_LOG_MAX = 60;
+let changeLogEntries = []; // newest first: { time, text, kind }
+
+function escapeHtml(value) {
+  return String(value).replace(/[&<>"']/g, ch => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]));
+}
+
+function logChange(text, kind = "ok") {
+  const stamp = new Date().toTimeString().slice(0, 8);
+  changeLogEntries.unshift({ time: stamp, text, kind });
+  if (changeLogEntries.length > CHANGE_LOG_MAX) changeLogEntries.length = CHANGE_LOG_MAX;
+  renderChangeLog();
+}
+
+function clearChangeLog() {
+  changeLogEntries = [];
+  renderChangeLog();
+}
+
+function renderChangeLog() {
+  const box = document.getElementById("changeLogList");
+  if (!box) return;
+  if (changeLogEntries.length === 0) {
+    box.innerHTML = "<li class='cl-empty'>No changes yet — process a log to see what was updated.</li>";
+    return;
+  }
+  box.innerHTML = changeLogEntries.map(e =>
+    `<li class="cl-item cl-${e.kind}"><span class="cl-time">${e.time}</span><span class="cl-text">${escapeHtml(e.text)}</span></li>`
+  ).join("");
+}
+
+// Human-readable diff between two target records (oldRec may be null for brand-new targets)
+function describeRecordDiff(oldRec, newRec) {
+  if (!newRec) return [];
+  const parts = [];
+  if (!oldRec) {
+    parts.push("NEW TARGET");
+  } else {
+    const fieldFmt = [
+      ["username", v => `user ${v}`],
+      ["level", v => `Lv.${v}`],
+      ["hardware", v => v],
+      ["firewall", v => `Firewall Lv.${v}`],
+      ["encryptor", v => `Encryptor Lv.${v}`]
+    ];
+    for (const [key, fmt] of fieldFmt) {
+      const a = oldRec[key];
+      const b = newRec[key];
+      if (!a && b !== undefined && b !== null && b !== "") parts.push(`+${fmt(b)}`);
+      else if (a && !b) parts.push(`-${fmt(a)}`);
+      else if (String(a) !== String(b)) parts.push(`${key} ${fmt(a)}→${fmt(b)}`);
+    }
+  }
+  const oldWallets = (oldRec && oldRec.wallets) || [];
+  const newWallets = (newRec.wallets || []).filter(w => !oldWallets.includes(w));
+  if (newWallets.length > 0) parts.push(`+${newWallets.length} wallet(s)`);
+  for (const mapKey of ["downloads", "uploads"]) {
+    const aMap = (oldRec && oldRec[mapKey]) || {};
+    const bMap = newRec[mapKey] || {};
+    for (const name of Object.keys(bMap)) {
+      if (!aMap[name]) parts.push(`+${name} Lv.${bMap[name].level}`);
+      else if (String(aMap[name].level) !== String(bMap[name].level)) parts.push(`${name} Lv.${aMap[name].level}→Lv.${bMap[name].level}`);
+    }
+  }
+  return parts;
+}
+
+// --- 2c. Undo / Snapshot System ---
 let previousDatabaseSnapshot = null;
 let lastPastedInputText = "";
 const undoBtn = document.getElementById("undoBtn");
@@ -521,6 +589,106 @@ function compareIps(ipA, ipB) {
   return 0;
 }
 
+// --- Software Filter Query Parsing & Matching ---
+const KNOWN_SOFTWARE_NAMES = [
+  "Password Cracker", "Password Encryptor",
+  ...new Set(Object.keys(SOFTWARE_ICONS))
+].sort((a, b) => b.length - a.length); // Longest first so multi-word names win
+
+// Extracts a level from single tokens like "Lv.9", "LV3" or "LVL9" — null if not one.
+function parseLevelToken(token) {
+  const m = String(token).match(/^l{1,2}vl?\.?\s*(\d+)$/i);
+  return m ? parseInt(m[1], 10) : null;
+}
+
+// True for a bare "lv" / "lvl" word whose number arrives in the next token.
+function isLevelWord(token) {
+  return /^(?:lv|lvl)$/.test(String(token).toLowerCase());
+}
+
+// Parses a filter query into OR groups (split by "|"); each group is an AND list of {name, level} conditions.
+// Examples: "Bypasser Lv.9" | "Spam Lv.3 Bypasser" | "Password Cracker Lv.5"
+function parseSoftwareQuery(query) {
+  if (!query || !query.trim()) return null;
+
+  const groups = query.split("|").map((groupText) => {
+    const tokens = groupText.trim().split(/\s+/).filter(Boolean);
+    const conditions = [];
+    let i = 0;
+
+    while (i < tokens.length) {
+      // Try to match a known software name greedily across consecutive tokens
+      let matchedName = null;
+      for (const candidate of KNOWN_SOFTWARE_NAMES) {
+        const words = candidate.split(" ");
+        if (i + words.length > tokens.length) continue;
+        const slice = tokens.slice(i, i + words.length).join(" ").toLowerCase();
+        if (slice === candidate.toLowerCase()) {
+          matchedName = candidate;
+          break;
+        }
+      }
+
+      let level = null;
+      if (matchedName) {
+        i += matchedName.split(" ").length;
+        // Optional level spec right after the name: "Lv.9", "LVL 3" or a bare number ("Bypasser 9")
+        if (tokens[i]) {
+          const single = parseLevelToken(tokens[i]);
+          if (single !== null) {
+            level = single;
+            i++;
+          } else if (isLevelWord(tokens[i]) && tokens[i + 1] && /^\d+$/.test(tokens[i + 1])) {
+            // "Bypasser LVL 9" — word and number split across two tokens
+            level = parseInt(tokens[i + 1], 10);
+            i += 2;
+          } else if (/^\d+$/.test(tokens[i])) {
+            level = parseInt(tokens[i], 10);
+            i++;
+          }
+        }
+      } else {
+        // Bare token: could be a partial name; stray level words / numbers are ignored
+        const lvlOnly = parseLevelToken(tokens[i]) !== null || isLevelWord(tokens[i]);
+        if (!lvlOnly && !/^\d+$/.test(tokens[i])) conditions.push({ name: tokens[i].toLowerCase(), level: null });
+        i++;
+      }
+
+      if (matchedName) conditions.push({ name: matchedName.toLowerCase(), level });
+    }
+
+    return conditions;
+  }).filter((conditions) => conditions.length > 0);
+
+  return groups.length > 0 ? groups : null;
+}
+
+// A record matches if ANY OR group has ALL of its conditions present in the target's software inventory.
+function recordMatchesQuery(record, groups) {
+  const downloads = record.downloads || {};
+  return groups.some((conditions) =>
+    conditions.every((cond) => {
+      const entry = Object.entries(downloads).find(
+        ([name]) => name.toLowerCase() === cond.name || name.toLowerCase().includes(cond.name)
+      );
+      if (!entry) return false;
+      return cond.level === null || entry[1].level === cond.level;
+    })
+  );
+}
+
+// True if this single software entry satisfies at least one condition in any OR group (card highlighting).
+function entryMatchesFilter(name, data, groups) {
+  const n = name.toLowerCase();
+  return groups.some((conditions) =>
+    conditions.some(
+      (cond) =>
+        (n === cond.name || n.includes(cond.name)) &&
+        (cond.level === null || data.level === cond.level)
+    )
+  );
+}
+
 function createCardElement(node) {
   const card = document.createElement("div");
   card.className = "node-card";
@@ -537,9 +705,10 @@ function createCardElement(node) {
     : "";
 
   const downEntries = Object.entries(node.downloads || {});
+  const activeGroups = parseSoftwareQuery(document.getElementById("softwareFilterInput").value);
   const downTags = downEntries.length > 0
     ? downEntries.map(([name, data]) => `
-        <div class="sw-card sw-loot">
+        <div class="sw-card sw-loot${activeGroups && entryMatchesFilter(name, data, activeGroups) ? " sw-match" : ""}" data-sw-name="${name.toLowerCase()}" data-sw-level="${data.level}">
           <span>${getSoftwareIcon(name)} ${name}</span>
           <strong>Lv${data.level}</strong>
         </div>
@@ -608,6 +777,8 @@ function renderFromDB() {
 
   const fullContainer = document.getElementById("fullIpContainer");
   const partialContainer = document.getElementById("partialIpContainer");
+  const filterInput = document.getElementById("softwareFilterInput");
+  const activeGroups = parseSoftwareQuery(filterInput.value);
 
   fullContainer.innerHTML = "";
   partialContainer.innerHTML = "";
@@ -615,19 +786,28 @@ function renderFromDB() {
   const tx = db.transaction(STORE_NAME, "readonly");
   const store = tx.objectStore(STORE_NAME);
   const req = store.getAll();
-
   req.onsuccess = () => {
     const records = req.result || [];
     const fullIps = [];
     const partialIps = [];
+    let matchCount = 0;
 
     records.forEach((rec) => {
+      if (activeGroups && !recordMatchesQuery(rec, activeGroups)) return;
+      matchCount++;
       if (rec.ip.includes("xxx")) partialIps.push(rec);
       else fullIps.push(rec);
     });
 
     fullIps.sort((a, b) => compareIps(a.ip, b.ip));
     partialIps.sort((a, b) => compareIps(a.ip, b.ip));
+
+    if (activeGroups && matchCount === 0) {
+      const noMatchMsg = "<p style='color:#fbbf24; font-size:13px;'>No targets match your software filter.</p>";
+      fullContainer.innerHTML = noMatchMsg;
+      partialContainer.innerHTML = noMatchMsg;
+      return;
+    }
 
     if (fullIps.length === 0) fullContainer.innerHTML = "<p style='color:#475569; font-size:13px;'>No full targets recorded.</p>";
     else fullIps.forEach((n) => fullContainer.appendChild(createCardElement(n)));
@@ -636,6 +816,13 @@ function renderFromDB() {
     else partialIps.forEach((n) => partialContainer.appendChild(createCardElement(n)));
   };
 }
+
+// Live software filtering
+document.getElementById("softwareFilterInput").addEventListener("input", () => renderFromDB());
+document.getElementById("clearFilterBtn").addEventListener("click", () => {
+  document.getElementById("softwareFilterInput").value = "";
+  renderFromDB();
+});
 
 // --- 7. Event Handlers ---
 document.getElementById("processMyLogsBtn").addEventListener("click", async () => {

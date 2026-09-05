@@ -212,6 +212,32 @@
       text-transform: uppercase;
       letter-spacing: 0.05em;
     }
+    /* Software Filter Bar */
+    .filter-bar {
+      display: flex;
+      gap: 8px;
+      margin: 14px 0 6px 0;
+    }
+    #softwareFilterInput {
+      flex: 1;
+      min-width: 0;
+      background: #050811;
+      color: #e2e8f0;
+      border: 1px solid #1e293b;
+      border-radius: 6px;
+      padding: 10px;
+      font-family: monospace;
+      font-size: 14px; /* Prevents mobile browser auto-zooming */
+      box-sizing: border-box;
+    }
+    #softwareFilterInput:focus {
+      outline: none;
+      border-color: #2563eb;
+    }
+    .sw-card.sw-match {
+      outline: 2px solid #fbbf24;
+      box-shadow: 0 0 8px rgba(251, 191, 36, 0.35);
+    }
 
     /* Mobile-Specific Adaptations */
     @media (max-width: 600px) {
@@ -260,6 +286,11 @@
     <button id="processHomeBtn" class="alt-btn">Victim Home</button>
     <button id="processSoftwareBtn" class="alt-btn">Victim Software</button>
     <button id="undoBtn" style="background: #475569;" disabled>Undo Last Ingest</button>
+  </div>
+
+  <div class="filter-bar">
+    <input type="text" id="softwareFilterInput" placeholder='Filter by Target Software — e.g. "Bypasser Lv.9 Spam Lv.3" (space = AND, | = OR)' autocomplete="off">
+    <button id="clearFilterBtn" class="alt-btn" style="padding: 10px 14px; font-size: 13px;">Clear</button>
   </div>
 
   <div class="section-title" style="color: #60a5fa;">Full Targets</div>
