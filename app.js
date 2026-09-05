@@ -480,6 +480,36 @@ async function editTargetIp(oldIp) {
   };
 }
 
+function parseSoftwareScreen(text) {
+  // 1. Support both standard (') and curly (’) apostrophes
+  const userMatch = text.match(/([a-zA-Z0-9_-]+)['’]s installed software/i);
+  const username = userMatch ? userMatch[1].trim() : null;
+
+  const softwareItems = {};
+  const validNames = [
+    "Antivirus", "Spam", "Rootkit", "Firewall", "Bypasser",
+    "Password Cracker", "Password Encryptor", "Proxy", "Trace",
+    "Siphon"
+  ];
+
+  // 2. Normalize and scan by tool name
+  validNames.forEach((name) => {
+    const pattern = new RegExp(
+      "\\b" + name.replace(/\s+/g, "\\s+") + "\\b[\\s\\S]*?LVL\\s*(\\d+)",
+      "i"
+    );
+    const match = text.match(pattern);
+    if (match) {
+      softwareItems[name] = {
+        level: parseInt(match[1], 10),
+        status: "installed"
+      };
+    }
+  });
+
+  return { username, softwareItems };
+}
+
 function compareIps(ipA, ipB) {
   const octA = ipA.split(".");
   const octB = ipB.split(".");
