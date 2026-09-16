@@ -42,12 +42,33 @@ function getSoftwareIcon(name) {
 }
 
 // --- 3. Regex Helpers ---
+// These are already defined in your code, but let's make sure they're properly used:
 const REGEX_IP = /\b(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\b/;
 const REGEX_MASKED_IP = /\b(?:\d{1,3}|xxx)\.(?:\d{1,3}|xxx)\.(?:\d{1,3}|xxx)\.(?:\d{1,3}|xxx)\b/;
 
+// Add a more comprehensive pattern for line validation
+const VALID_LOG_LINE_PATTERN = /^\[[0-9]{1,2}-[0-9]{1,2}\s+[0-9]{1,2}:[0-9]{2}\]/;
+
+
 function extractIp(text) {
-  const match = text.match(REGEX_IP) || text.match(REGEX_MASKED_IP);
-  return match ? match[0] : null;
+    // Handle [UNKNOWN] case specifically
+    if (text.includes('[UNKNOWN]')) {
+        return null; // Return null for unknown IPs instead of trying to parse them
+    }
+    
+    // Try standard IP pattern first
+    const ipMatch = text.match(REGEX_IP);
+    if (ipMatch) {
+        return ipMatch[0];
+    }
+    
+    // Try masked IP pattern second
+    const maskedIpMatch = text.match(REGEX_MASKED_IP);
+    if (maskedIpMatch) {
+        return maskedIpMatch[0];
+    }
+    
+    return null;
 }
 
 // --- 4. Parsers ---
@@ -106,70 +127,144 @@ function parseMyLogs(rawLines) {
 }
 
 function parseVictimLogs(rawLines) {
-  const updates = [];
-
-  for (let i = rawLines.length - 1; i >= 0; i--) {
-    const line = rawLines[i].trim();
-    if (!line) continue;
-
-    const timeMatch = line.match(/^\[([^\]]+)\]/);
-    const time = timeMatch ? timeMatch[1] : null;
-
-    const byMatch = line.match(/\bby\s+((?:(?:\d{1,3}|xxx)\.){3}(?:\d{1,3}|xxx))\b/i);
-    if (byMatch) {
-      const attackerIp = byMatch[1];
-      const softMatch = line.match(/Lv(\d+)\s+(.+?)\s+being\s+(uploaded|downloaded)\s+by/i);
-      let software = null;
-      if (softMatch) {
-        software = {
-          level: parseInt(softMatch[1], 10),
-          name: softMatch[2].trim(),
-          action: softMatch[3].toLowerCase()
-        };
-      }
-
-      updates.push({
-        ip: attackerIp,
-        time,
-        software,
-        isOwnedSoftware: true,
-        raw: line
-      });
-      continue;
+    const updates = [];
+    
+    // Filter out non-log lines (noise, graffiti)
+    const validLines = rawLines.filter(line => {
+        if (!line.trim()) return false;  // Skip empty lines
+        
+        // Filter out single character lines that are likely graffiti
+        if (line.trim().length === 1) return false;
+        
+        // Only process lines that start with timestamp format [MM-DD HH:MM]
+        const timestampPattern = /^\[[0-9]{1,2}-[0-9]{1,2}\s+[0-9]{1,2}:[0-9]{2}\]/;
+        return timestampPattern.test(line.trim());
+    });
+    
+    for (let i = validLines.length - 1; i >= 0; i--) {
+        const line = validLines[i].trim();
+        if (!line) continue;
+        
+        // Skip lines with [UNKNOWN] IPs
+        if (line.includes('[UNKNOWN]')) continue;
+        
+        const timeMatch = line.match(/^$$([^$$]+)$$/);
+        const time = timeMatch ? timeMatch[1] : null;
+        
+        // Handle device access lines
+        const accessedMatch = line.match(/Device accessed from\s+((?:(?:\d{1,3}|xxx)\.){3}(?:\d{1,3}|xxx))/i);
+        if (accessedMatch) {
+            const ip = extractIp(accessedMatch[1]);
+            if (ip && ip !== '[UNKNOWN]') {
+                updates.push({ ip: ip, time, raw: line });
+                continue;
+            }
+        }
+        
+        // Handle software ownership lines with "from" or "to"
+        let softMatch = null;
+        let targetIp = null;
+        let action = null;
+        let level = null;
+        let softwareName = null;
+        let isOwned = false;
+        
+        // First, try to match lines that have explicit IP references
+        const fromMatch = line.match(/(Downloaded|Uploaded|Downloading|Uploading)\s+Lv(\d+)\s+(.+?)\s+from\s+((?:(?:\d{1,3}|xxx)\.){3}(?:\d{1,3}|xxx))/i);
+        const toMatch = line.match(/(Downloaded|Uploaded|Downloading|Uploading)\s+Lv(\d+)\s+(.+?)\s+to\s+((?:(?:\d{1,3}|xxx)\.){3}(?:\d{1,3}|xxx))/i);
+        
+        if (fromMatch) {
+            action = fromMatch[1].toLowerCase();
+            level = parseInt(fromMatch[2], 10);
+            softwareName = fromMatch[3].trim();
+            targetIp = extractIp(fromMatch[4]);
+            isOwned = action.startsWith("download");
+        } else if (toMatch) {
+            action = toMatch[1].toLowerCase();
+            level = parseInt(toMatch[2], 10);
+            softwareName = toMatch[3].trim();
+            targetIp = extractIp(toMatch[4]);
+            isOwned = action.startsWith("download");
+        } else {
+            // Fallback to original pattern for lines without explicit IP references
+            softMatch = line.match(/(Downloaded|Uploaded|Downloading|Uploading)\s+Lv(\d+)\s+(.+?)(?:\s+(?:from|to)\b|\.|\.\.|\s*$)/i);
+            if (softMatch) {
+                action = softMatch[1].toLowerCase();
+                level = parseInt(softMatch[2], 10);
+                softwareName = softMatch[3].trim();
+                isOwned = action.startsWith("download");
+                
+                // Try to extract IP from the line for upload/download actions
+                const ipFromLine = extractIp(line);
+                if (ipFromLine && !line.includes('[UNKNOWN]')) {
+                    targetIp = ipFromLine;
+                }
+            }
+        }
+        
+        // Handle lines that don't match software patterns but have IPs
+        if (!softMatch && !fromMatch && !toMatch) {
+            const byMatch = line.match(/by\s+((?:(?:\d{1,3}|xxx)\.){3}(?:\d{1,3}|xxx))/i);
+            if (byMatch) {
+                targetIp = extractIp(byMatch[1]);
+            }
+        }
+        
+        // Handle crypto transfers and other actions
+        const transferMatch = line.match(/(\d+)\s+Crypto\s+transferred\s+to\s+(hx[a-zA-Z0-9.]+)/);
+        if (transferMatch) {
+            updates.push({
+                ip: targetIp,
+                time,
+                wallet: transferMatch[2],
+                raw: line
+            });
+            continue;
+        }
+        
+        // Handle password cracking actions  
+        const crackMatch = line.match(/(Cracking|Cracked)\s+password\s+(?:on\s+)?((?:(?:\d{1,3}|xxx)\.){3}(?:\d{1,3}|xxx))/i);
+        if (crackMatch) {
+            targetIp = extractIp(crackMatch[2]);
+            updates.push({
+                ip: targetIp,
+                time,
+                raw: line
+            });
+            continue;
+        }
+        
+        // Handle firewall actions
+        const firewallMatch = line.match(/(Bypassed|Failed to bypass)\s+firewall\s+(?:on\s+)?((?:(?:\d{1,3}|xxx)\.){3}(?:\d{1,3}|xxx))/i);
+        if (firewallMatch) {
+            targetIp = extractIp(firewallMatch[2]);
+            updates.push({
+                ip: targetIp,
+                time,
+                raw: line
+            });
+            continue;
+        }
+        
+        // Handle software ownership with proper IP extraction
+        if (softMatch || fromMatch || toMatch) {
+            if (targetIp && !line.includes('[UNKNOWN]')) {
+                updates.push({
+                    ip: targetIp,
+                    time,
+                    software: {
+                        action: action,
+                        level: level,
+                        name: softwareName
+                    },
+                    isOwnedSoftware: isOwned,
+                    raw: line
+                });
+            }
+        }
     }
-
-    const accessedFromMatch = line.match(/Device accessed from\s+((?:(?:\d{1,3}|xxx)\.){3}(?:\d{1,3}|xxx))\b/i);
-    if (accessedFromMatch) {
-      updates.push({ ip: accessedFromMatch[1], time, raw: line });
-      continue;
-    }
-
-    // Also handle transfer lines in the "Downloading/Uploading LvN Name from/to IP" format.
-    // In a victim log the mentioned IP is the other party (the attacker), so it owns the software.
-    const transferMatch = line.match(
-      /(Downloaded|Uploaded|Downloading|Uploading)\s+Lv(\d+)\s+(.+?)\s+(?:from|to)\s+((?:(?:\d{1,3}|xxx)\.){3}(?:\d{1,3}|xxx))\b/i
-    );
-    if (transferMatch) {
-      updates.push({
-        ip: transferMatch[4],
-        time,
-        software: {
-          level: parseInt(transferMatch[2], 10),
-          name: transferMatch[3].trim(),
-          action: transferMatch[1].toLowerCase()
-        },
-        isOwnedSoftware: true,
-        raw: line
-      });
-      continue;
-    }
-
-    const outboundIp = extractIp(line);
-    if (outboundIp) {
-      updates.push({ ip: outboundIp, time, raw: line });
-    }
-  }
-  return updates;
+    
+    return updates;
 }
 
 function parseHomeScreen(text) {
@@ -845,19 +940,7 @@ document.getElementById("clearFilterBtn").addEventListener("click", () => {
 });
 
 // --- 7. Event Handlers ---
-document.getElementById("processMyLogsBtn").addEventListener("click", async () => {
-  const text = document.getElementById("dataInput").value;
-  if (!text.trim()) return;
-
-  await captureSnapshot();
-  const updates = parseMyLogs(text.split("\n"));
-  await mergeUpdates(updates);
-  document.getElementById("dataInput").value = "";
-  await reconcileDatabase();
-  renderFromDB();
-});
-
-document.getElementById("processVictimLogsBtn").addEventListener("click", async () => {
+document.getElementById("processLogsBtn").addEventListener("click", async () => {
   const text = document.getElementById("dataInput").value;
   if (!text.trim()) return;
 
