@@ -325,7 +325,8 @@ function initializeRecord(ip) {
     encryptor: null,
     wallets: [],
     downloads: {},
-    uploads: {}
+    uploads: {},
+    history: []
   };
 }
 
@@ -372,6 +373,8 @@ async function mergeUpdates(updates) {
 
   // Apply updates to in-memory records
   for (const item of updates) {
+    if (!item || !item.ip) continue;
+
     let record = existingMap.get(item.ip);
     if (!record) {
       record = initializeRecord(item.ip);
@@ -842,7 +845,7 @@ function createCardElement(node) {
       `).join("")
     : "";
 
-  const historyEntries = node.history.map((r) => `<div class="history-entry">${r}</div>`).join("");
+  const historyEntries = (node.history || []).map((r) => `<div class="history-entry">${r}</div>`).join("");
 
   card.innerHTML = `
     <div class="node-meta">
