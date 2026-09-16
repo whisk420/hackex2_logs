@@ -3,6 +3,9 @@ const DB_NAME = "TargetAggregatorMasterDB_v4";
 const STORE_NAME = "targets";
 let db;
 
+// --- New Global Log History ---
+const logHistory = [];
+
 const dbReq = indexedDB.open(DB_NAME, 1);
 
 dbReq.onupgradeneeded = (e) => {
@@ -322,8 +325,7 @@ function initializeRecord(ip) {
     encryptor: null,
     wallets: [],
     downloads: {},
-    uploads: {},
-    history: []
+    uploads: {}
   };
 }
 
@@ -1061,3 +1063,120 @@ document.getElementById("clearBtn").addEventListener("click", () => {
   tx.objectStore(STORE_NAME).clear();
   tx.oncomplete = () => renderFromDB();
 });
+
+// --- Export and Import Functions ---
+function exportLogHistory() {
+    // Create a formatted string with all log entries
+    let exportData = "";
+    
+    // Add header information if needed
+    exportData += "// Log History Export\n";
+    exportData += `// Generated on: ${new Date().toISOString()}\n`;
+    exportData += `// Total entries: ${logHistory.length}\n\n`;
+    
+    // Add all log entries
+    for (const entry of logHistory) {
+        exportData += `${entry}\n`;
+    }
+    
+    return exportData;
+}
+
+function importLogHistory(data) {
+    const lines = data.split('\n');
+    let importedCount = 0;
+    
+    for (const line of lines) {
+        if (!line.trim()) continue;
+        
+        // Skip header comments
+        if (line.startsWith('//')) continue;
+        
+        // Add to log history - only valid entries that match our format
+        if (line.match(/^[\[][0-9]{1,2}-[0-9]{1,2}\s+[0-9]{1,2}:[0-9]{2}/)) {
+            logHistory.push(line);
+            importedCount++;
+        }
+    }
+    
+    return importedCount;
+}
+
+// Add export button to UI
+function addExportImportButtons() {
+    const container = document.getElementById('buttonContainer');
+    if (!container) return;
+    
+    // Create and append export button
+    const exportBtn = document.createElement('button');
+    exportBtn.id = 'exportBtn';
+    exportBtn.textContent = 'Export Logs';
+    exportBtn.style.cssText = `
+        background: #10b981; 
+        color: white; 
+        border: none; 
+        padding: 8px 12px; 
+        margin-right: 5px;
+        border-radius: 4px;
+        cursor: pointer;
+    `;
+    
+    exportBtn.addEventListener('click', () => {
+        const data = exportLogHistory();
+        const blob = new Blob([data], { type: 'text/plain' });
+        const url = URL.createObjectURL(blob);
+        
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `log_history_${new Date().toISOString().slice(0, 10)}.txt`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+    });
+    
+    // Create and append import button
+    const importBtn = document.createElement('button');
+    importBtn.id = 'importBtn';
+    importBtn.textContent = 'Import Logs';
+    importBtn.style.cssText = `
+        background: #3b82f6; 
+        color: white; 
+        border: none; 
+        padding: 8px 12px; 
+        margin-right: 5px;
+        border-radius: 4px;
+        cursor: pointer;
+    `;
+    
+    importBtn.addEventListener('click', async () => {
+        const input = document.createElement('input');
+        input.type = 'file';
+        input.accept = '.txt';
+        
+        input.onchange = async (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+            
+            try {
+                const text = await file.text();
+                const count = importLogHistory(text);
+                alert(`Successfully imported ${count} log entries`);
+                
+                // Optionally refresh the UI or database
+                renderFromDB();
+            } catch (error) {
+                console.error('Import error:', error);
+                alert('Failed to import logs: ' + error.message);
+            }
+        };
+        
+        input.click();
+    });
+    
+    container.appendChild(exportBtn);
+    container.appendChild(importBtn);
+}
+
+// Initialize export/import buttons when page loads
+window.addEventListener('load', addExportImportButtons);
