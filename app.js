@@ -763,13 +763,17 @@ const KNOWN_SOFTWARE_NAMES = [
 
 // Extracts a level from single tokens like "Lv.9", "LV3" or "LVL9" — null if not one.
 function parseLevelToken(token) {
-  const m = String(token).match(/^l{1,2}vl?\.?\s*(\d+)$/i);
+  const m = String(token).match(/^lv(?:l)?\.?\s*(\d+)$/i);
   return m ? parseInt(m[1], 10) : null;
 }
 
 // True for a bare "lv" / "lvl" word whose number arrives in the next token.
 function isLevelWord(token) {
   return /^(?:lv|lvl)$/.test(String(token).toLowerCase());
+}
+
+function isIpToken(token) {
+  return /^(?:(?:\d{1,3}|xxx)\.){3}(?:\d{1,3}|xxx)$/i.test(String(token));
 }
 
 // Parses a filter query into OR groups (split by "|"); each group is an AND list of {name, level} conditions.
@@ -783,6 +787,12 @@ function parseSoftwareQuery(query) {
     let i = 0;
 
     while (i < tokens.length) {
+      if (isIpToken(tokens[i])) {
+        conditions.push({ type: "ip", value: tokens[i].toLowerCase() });
+        i++;
+        continue;
+      }
+
       // Try to match a known software name greedily across consecutive tokens
       let matchedName = null;
       for (const candidate of KNOWN_SOFTWARE_NAMES) {
@@ -816,11 +826,11 @@ function parseSoftwareQuery(query) {
       } else {
         // Bare token: could be a partial name; stray level words / numbers are ignored
         const lvlOnly = parseLevelToken(tokens[i]) !== null || isLevelWord(tokens[i]);
-        if (!lvlOnly && !/^\d+$/.test(tokens[i])) conditions.push({ name: tokens[i].toLowerCase(), level: null });
+        if (!lvlOnly && !/^\d+$/.test(tokens[i])) conditions.push({ type: "software", name: tokens[i].toLowerCase(), level: null });
         i++;
       }
 
-      if (matchedName) conditions.push({ name: matchedName.toLowerCase(), level });
+      if (matchedName) conditions.push({ type: "software", name: matchedName.toLowerCase(), level });
     }
 
     return conditions;
@@ -834,6 +844,9 @@ function recordMatchesQuery(record, groups) {
   const downloads = record.downloads || {};
   return groups.some((conditions) =>
     conditions.every((cond) => {
+      if (cond.type === "ip") {
+        return record.ip.toLowerCase().includes(cond.value);
+      }
       const entry = Object.entries(downloads).find(
         ([name]) => name.toLowerCase() === cond.name || name.toLowerCase().includes(cond.name)
       );
@@ -849,6 +862,7 @@ function entryMatchesFilter(name, data, groups) {
   return groups.some((conditions) =>
     conditions.some(
       (cond) =>
+        cond.type !== "ip" &&
         (n === cond.name || n.includes(cond.name)) &&
         (cond.level === null || data.level === cond.level)
     )
