@@ -16,9 +16,15 @@
     }
     .header {
       display: flex;
-      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 6px;
       align-items: center;
       margin-bottom: 12px;
+    }
+    .header-actions {
+      display: flex;
+      gap: 4px;
+      margin-left: auto;
     }
     textarea {
       width: 100%;
@@ -275,7 +281,9 @@
 
   <div class="header">
     <h2 style="margin: 0; font-size: 18px;">Target Intelligence Console</h2>
-    <button id="clearBtn" class="danger" style="padding: 6px 10px; font-size: 12px;">Wipe DB</button>
+    <div class="header-actions">
+      <button id="clearBtn" class="danger" style="padding: 6px 10px; font-size: 12px;">Wipe DB</button>
+    </div>
   </div>
 
   <textarea id="dataInput" placeholder="Paste data here (Logs, Home Screen, or Software Screen)..."></textarea>

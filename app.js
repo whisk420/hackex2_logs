@@ -1,23 +1,27 @@
 // --- 1. IndexedDB Initialization ---
 const DB_NAME = "TargetAggregatorMasterDB_v4";
 const STORE_NAME = "targets";
+const ARCHIVE_STORE_NAME = "ingestArchive";
 let db;
 
 // --- New Global Log History ---
 const logHistory = [];
 
-const dbReq = indexedDB.open(DB_NAME, 1);
+const dbReq = indexedDB.open(DB_NAME, 2);
 
 dbReq.onupgradeneeded = (e) => {
   const d = e.target.result;
   if (!d.objectStoreNames.contains(STORE_NAME)) {
     d.createObjectStore(STORE_NAME, { keyPath: "ip" });
   }
+  if (!d.objectStoreNames.contains(ARCHIVE_STORE_NAME)) {
+    d.createObjectStore(ARCHIVE_STORE_NAME, { keyPath: "id", autoIncrement: true });
+  }
 };
 
 dbReq.onsuccess = (e) => {
   db = e.target.result;
-  renderFromDB();
+  migrateLegacyHistory().then(renderFromDB);
 };
 
 dbReq.onerror = (e) => console.error("Database initialization failed:", e);
@@ -271,7 +275,7 @@ function parseVictimLogs(rawLines) {
 }
 
 function parseHomeScreen(text) {
-  const ipMatch = text.match(/IP\s*([0-9]{1,3}(?:\.[0-9]{1,3}|\.xxx){3})/i);
+  const ipMatch = text.match(/IP\s*:?\s*([0-9]{1,3}(?:\.[0-9]{1,3}|\.xxx){3})/i);
   if (!ipMatch) return null;
   const ip = ipMatch[1].trim();
 
@@ -281,25 +285,29 @@ function parseHomeScreen(text) {
   if (afterCaretMatch) {
     username = afterCaretMatch[1].trim();
   }
+  if (!username) {
+    const compactUserMatch = text.match(/^\/\/\/\s*([^/]+?)\s*\//m);
+    if (compactUserMatch) username = compactUserMatch[1].trim();
+  }
 
   // 2. Clan Tag (Optional): Stored separately
   const clanMatch = text.match(/\[([a-zA-Z0-9_-]{2,6})\]/i);
   const clan = clanMatch ? clanMatch[1].trim() : null;
 
   // 3. Stats & Hardware
-  const lvlMatch = text.match(/LVL\s*(\d+)/i);
+  const lvlMatch = text.match(/LVL\s*:?\s*(\d+)/i);
   const level = lvlMatch ? parseInt(lvlMatch[1], 10) : null;
 
-  const devMatch = text.match(/DEVICE\s*([^\n]+)/i);
+  const devMatch = text.match(/DEVICE\s*:?\s*([^\n/]+)/i);
   const device = devMatch ? devMatch[1].trim() : null;
 
-  const netMatch = text.match(/NETWORK\s*([^\n]+)/i);
+  const netMatch = text.match(/NETWORK\s*:?\s*([^\n/]+)/i);
   const network = netMatch ? netMatch[1].trim() : null;
 
-  const fwMatch = text.match(/FIREWALL\s*Lv\.?(\d+)/i);
+  const fwMatch = text.match(/FIREWALL\s*:?\s*Lv\.?\s*(\d+)/i);
   const firewall = fwMatch ? parseInt(fwMatch[1], 10) : null;
 
-  const encMatch = text.match(/ENCRYPTOR\s*Lv\.?(\d+)/i);
+  const encMatch = text.match(/ENCRYPTOR\s*:?\s*Lv\.?\s*(\d+)/i);
   const encryptor = encMatch ? parseInt(encMatch[1], 10) : null;
 
   return {
@@ -325,15 +333,57 @@ function initializeRecord(ip) {
     encryptor: null,
     wallets: [],
     downloads: {},
-    uploads: {},
-    history: []
+    uploads: {}
   };
+}
+
+function archiveIngest(type, rawText) {
+  if (!db || !rawText.trim()) return;
+  const tx = db.transaction(ARCHIVE_STORE_NAME, "readwrite");
+  tx.objectStore(ARCHIVE_STORE_NAME).add({
+    type,
+    raw: rawText,
+    importedAt: new Date().toISOString()
+  });
+}
+
+async function migrateLegacyHistory() {
+  const records = await getAllRecords(STORE_NAME);
+  const legacyRecords = records.filter((record) => Array.isArray(record.history) && record.history.length > 0);
+  if (legacyRecords.length === 0) return;
+
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction([STORE_NAME, ARCHIVE_STORE_NAME], "readwrite");
+    const targetStore = tx.objectStore(STORE_NAME);
+    const archiveStore = tx.objectStore(ARCHIVE_STORE_NAME);
+    for (const record of legacyRecords) {
+      for (const raw of record.history) {
+        if (typeof raw === "string") archiveStore.add({ type: "logs", raw, importedAt: new Date().toISOString() });
+      }
+      delete record.history;
+      targetStore.put(record);
+    }
+    tx.oncomplete = resolve;
+    tx.onerror = () => reject(tx.error);
+  });
+}
+
+function getAllRecords(storeName) {
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(storeName, "readonly");
+    const req = tx.objectStore(storeName).getAll();
+    req.onsuccess = () => resolve(req.result || []);
+    req.onerror = () => reject(req.error);
+  });
 }
 
 function mergeTargetRecords(base, incoming) {
   const baseIsMasked = base.ip.includes("xxx");
   const incomingIsMasked = incoming.ip.includes("xxx");
-  const canonicalIp = (!incomingIsMasked && baseIsMasked) ? incoming.ip : base.ip;
+  const baseIsTemporary = base.ip.startsWith("unknown:");
+  const canonicalIp = ((!incomingIsMasked && baseIsMasked) || (baseIsTemporary && !incomingIsMasked))
+    ? incoming.ip
+    : base.ip;
 
   const merged = {
     ip: canonicalIp,
@@ -345,8 +395,7 @@ function mergeTargetRecords(base, incoming) {
     encryptor: incoming.encryptor || base.encryptor || null,
     wallets: Array.from(new Set([...(base.wallets || []), ...(incoming.wallets || [])])),
     downloads: { ...(base.downloads || {}), ...(incoming.downloads || {}) },
-    uploads: { ...(base.uploads || {}), ...(incoming.uploads || {}) },
-    history: Array.from(new Set([...(base.history || []), ...(incoming.history || [])]))
+    uploads: { ...(base.uploads || {}), ...(incoming.uploads || {}) }
   };
 
   return {
@@ -394,9 +443,6 @@ async function mergeUpdates(updates) {
       };
     }
 
-    if (item.raw && !record.history.includes(item.raw)) {
-      record.history.push(item.raw);
-    }
   }
 
   // Write batch back cleanly in one atomic transaction
@@ -812,6 +858,7 @@ function entryMatchesFilter(name, data, groups) {
 function createCardElement(node) {
   const card = document.createElement("div");
   card.className = "node-card";
+  const displayIp = node.ip.startsWith("unknown:") ? "UNKNOWN" : node.ip;
 
   const userTag = node.username ? `<span class="user-tag">${node.username}</span>` : "";
   const lvlTag = node.level ? `<span class="stat-badge" style="background:#1e3a8a; color:#93c5fd;">Lv.${node.level}</span>` : "";
@@ -845,11 +892,9 @@ function createCardElement(node) {
       `).join("")
     : "";
 
-  const historyEntries = (node.history || []).map((r) => `<div class="history-entry">${r}</div>`).join("");
-
   card.innerHTML = `
     <div class="node-meta">
-        <span class="ip-title">${node.ip}</span>
+        <span class="ip-title">${displayIp}</span>
         ${clanBadge}
         ${userTag}
         ${lvlTag}
@@ -873,7 +918,6 @@ function createCardElement(node) {
         <div class="software-section-label">Active Deployments</div>
         <div class="software-grid">${upTags}</div>
       ` : ""}
-      ${historyEntries ? `<div class="history-list">${historyEntries}</div>` : ""}
     </div>
   `;
 
@@ -952,6 +996,7 @@ document.getElementById("processLogsBtn").addEventListener("click", async () => 
   await captureSnapshot();
   const updates = parseVictimLogs(text.split("\n"));
   await mergeUpdates(updates);
+  archiveIngest("logs", text);
   document.getElementById("dataInput").value = "";
   await reconcileDatabase();
   renderFromDB();
@@ -1008,6 +1053,7 @@ document.getElementById("processHomeBtn").addEventListener("click", async () => 
   store.put(finalRecord);
 
   writeTx.oncomplete = async () => {
+    archiveIngest("home", text);
     document.getElementById("dataInput").value = "";
     await reconcileDatabase();
     renderFromDB();
@@ -1039,11 +1085,10 @@ document.getElementById("processSoftwareBtn").addEventListener("click", async ()
 
   // Normalized matching (case-insensitive, trimmed)
   const targetUser = parsed.username.trim().toLowerCase();
-  const record = allRecords.find((r) => r.username && r.username.trim().toLowerCase() === targetUser);
-
+  let record = allRecords.find((r) => r.username && r.username.trim().toLowerCase() === targetUser);
   if (!record) {
-    alert(`No existing record found for username '${parsed.username}'. Please process their Home Screen first to register their IP.`);
-    return;
+    record = initializeRecord(`unknown:${targetUser}`);
+    record.username = parsed.username.trim();
   }
 
   // Merge discovered software into target inventory
@@ -1055,6 +1100,7 @@ document.getElementById("processSoftwareBtn").addEventListener("click", async ()
   writeTx.objectStore(STORE_NAME).put(record);
 
   writeTx.oncomplete = () => {
+    archiveIngest("software", text);
     document.getElementById("dataInput").value = "";
     renderFromDB();
   };
@@ -1062,8 +1108,9 @@ document.getElementById("processSoftwareBtn").addEventListener("click", async ()
 
 document.getElementById("clearBtn").addEventListener("click", () => {
   if (!confirm("Are you sure you want to wipe the entire database?")) return;
-  const tx = db.transaction(STORE_NAME, "readwrite");
+  const tx = db.transaction([STORE_NAME, ARCHIVE_STORE_NAME], "readwrite");
   tx.objectStore(STORE_NAME).clear();
+  tx.objectStore(ARCHIVE_STORE_NAME).clear();
   tx.oncomplete = () => renderFromDB();
 });
 
@@ -1181,5 +1228,99 @@ function addExportImportButtons() {
     container.appendChild(importBtn);
 }
 
-// Initialize export/import buttons when page loads
-window.addEventListener('load', addExportImportButtons);
+async function exportDataBundle() {
+  const bundle = {
+    format: "target-intelligence-console",
+    version: 1,
+    exportedAt: new Date().toISOString(),
+    targets: await getAllRecords(STORE_NAME),
+    ingests: await getAllRecords(ARCHIVE_STORE_NAME)
+  };
+
+  const blob = new Blob([JSON.stringify(bundle, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `target_console_${new Date().toISOString().slice(0, 10)}.json`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
+async function importDataBundle(file) {
+  const bundle = JSON.parse(await file.text());
+  if (!bundle || bundle.format !== "target-intelligence-console" || bundle.version !== 1) {
+    throw new Error("This is not a Target Intelligence Console export.");
+  }
+
+  const importedTargets = Array.isArray(bundle.targets) ? bundle.targets : [];
+  const importedIngests = Array.isArray(bundle.ingests) ? bundle.ingests : [];
+  const existingTargets = await getAllRecords(STORE_NAME);
+  const targets = new Map(existingTargets.filter((record) => record && record.ip).map((record) => [record.ip, record]));
+
+  for (const imported of importedTargets) {
+    if (!imported || !imported.ip) continue;
+    delete imported.history;
+    const existing = targets.get(imported.ip);
+    targets.set(imported.ip, existing ? mergeTargetRecords(existing, imported).merged : imported);
+  }
+
+  const tx = db.transaction([STORE_NAME, ARCHIVE_STORE_NAME], "readwrite");
+  const targetStore = tx.objectStore(STORE_NAME);
+  const archiveStore = tx.objectStore(ARCHIVE_STORE_NAME);
+  for (const target of targets.values()) targetStore.put(target);
+  for (const ingest of importedIngests) {
+    if (ingest && ["logs", "home", "software"].includes(ingest.type) && typeof ingest.raw === "string") {
+      archiveStore.add({ type: ingest.type, raw: ingest.raw, importedAt: ingest.importedAt || new Date().toISOString() });
+    }
+  }
+
+  await new Promise((resolve, reject) => {
+    tx.oncomplete = resolve;
+    tx.onerror = () => reject(tx.error);
+  });
+  renderFromDB();
+  return { targetCount: importedTargets.length, ingestCount: importedIngests.length };
+}
+
+function addArchiveButtons() {
+  const headerActions = document.querySelector(".header-actions");
+  if (!headerActions) return;
+
+  const exportButton = document.createElement("button");
+  exportButton.textContent = "Export Data";
+  exportButton.className = "alt-btn";
+  exportButton.addEventListener("click", async () => {
+    try {
+      await exportDataBundle();
+    } catch (error) {
+      alert(`Export failed: ${error.message}`);
+    }
+  });
+
+  const importButton = document.createElement("button");
+  importButton.textContent = "Import Data";
+  importButton.className = "alt-btn";
+  importButton.addEventListener("click", () => {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = ".json,application/json";
+    input.addEventListener("change", async () => {
+      const file = input.files && input.files[0];
+      if (!file) return;
+      try {
+        const result = await importDataBundle(file);
+        alert(`Imported ${result.targetCount} targets and ${result.ingestCount} archived ingests.`);
+      } catch (error) {
+        alert(`Import failed: ${error.message}`);
+      }
+    });
+    input.click();
+  });
+
+  headerActions.prepend(importButton);
+  headerActions.prepend(exportButton);
+}
+
+window.addEventListener("load", addArchiveButtons);
