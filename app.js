@@ -135,6 +135,7 @@ function parseMyLogs(rawLines) {
 
 function parseVictimLogs(rawLines) {
     const updates = [];
+  let lastAccess = null;
     
     // Filter out non-log lines (noise, graffiti)
     const validLines = rawLines.filter(line => {
@@ -151,21 +152,39 @@ function parseVictimLogs(rawLines) {
     for (let i = validLines.length - 1; i >= 0; i--) {
         const line = validLines[i].trim();
         if (!line) continue;
-        
-        // Skip lines with [UNKNOWN] IPs
-        if (line.includes('[UNKNOWN]')) continue;
-        
-        const timeMatch = line.match(/^$$([^$$]+)$$/);
+
+      const timeMatch = line.match(/^\[([^\]]+)\]/);
         const time = timeMatch ? timeMatch[1] : null;
+      const timeParts = time && time.match(/^(\d{1,2})-(\d{1,2})\s+(\d{1,2}):(\d{2})$/);
+      const eventMinute = timeParts
+        ? (((parseInt(timeParts[1], 10) * 31 + parseInt(timeParts[2], 10)) * 24 + parseInt(timeParts[3], 10)) * 60 + parseInt(timeParts[4], 10))
+        : null;
+
+      // Wallets are correlated only to the nearest preceding access in event time.
+      if (line.includes('[UNKNOWN]')) {
+        lastAccess = null;
+        continue;
+      }
         
         // Handle device access lines
         const accessedMatch = line.match(/Device accessed from\s+((?:(?:\d{1,3}|xxx)\.){3}(?:\d{1,3}|xxx))/i);
         if (accessedMatch) {
             const ip = extractIp(accessedMatch[1]);
             if (ip && ip !== '[UNKNOWN]') {
+            lastAccess = { ip, eventMinute };
                 updates.push({ ip: ip, time, raw: line });
                 continue;
             }
+        }
+
+        const accessAtMatch = line.match(/Accessed device at\s+((?:(?:\d{1,3}|xxx)\.){3}(?:\d{1,3}|xxx))/i);
+        if (accessAtMatch) {
+          const ip = extractIp(accessAtMatch[1]);
+          if (ip) {
+            lastAccess = { ip, eventMinute };
+            updates.push({ ip, time, raw: line });
+            continue;
+          }
         }
         
         // Handle software ownership lines with "from" or "to"
@@ -215,6 +234,16 @@ function parseVictimLogs(rawLines) {
             if (byMatch) {
                 targetIp = extractIp(byMatch[1]);
             }
+        }
+
+        const walletMatch = line.match(/(?:Stole\s+\d[\d,]*\s+Crypto\s+from|\d[\d,]*\s+Crypto\s+transferred\s+to)\s+(hx[a-zA-Z0-9.]+)/i);
+        if (walletMatch) {
+          const withinCorrelationWindow = lastAccess && eventMinute !== null && lastAccess.eventMinute !== null &&
+            eventMinute >= lastAccess.eventMinute && eventMinute - lastAccess.eventMinute <= 2;
+          if (withinCorrelationWindow) {
+            updates.push({ ip: lastAccess.ip, time, wallet: walletMatch[1], raw: line });
+          }
+          continue;
         }
         
         // Handle crypto transfers and other actions
@@ -432,8 +461,18 @@ async function mergeUpdates(updates) {
       existingMap.set(item.ip, record);
     }
 
-    if (item.wallet && !record.wallets.includes(item.wallet)) {
-      record.wallets.push(item.wallet);
+    if (item.wallet) {
+      const previousOwner = Array.from(existingMap.values()).find((candidate) =>
+        candidate.ip !== item.ip && (candidate.wallets || []).includes(item.wallet)
+      );
+      if (previousOwner) {
+        const merged = mergeTargetRecords(record, previousOwner).merged;
+        merged.ip = item.ip;
+        existingMap.delete(previousOwner.ip);
+        record = merged;
+        existingMap.set(item.ip, record);
+      }
+      if (!record.wallets.includes(item.wallet)) record.wallets.push(item.wallet);
     }
 
     if (item.software && item.isOwnedSoftware) {
