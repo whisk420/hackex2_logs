@@ -990,9 +990,16 @@ document.getElementById("clearFilterBtn").addEventListener("click", () => {
 });
 
 // --- 7. Event Handlers ---
-document.getElementById("processLogsBtn").addEventListener("click", async () => {
+document.getElementById("processDataBtn").addEventListener("click", async () => {
   const text = document.getElementById("dataInput").value;
   if (!text.trim()) return;
+
+  const homeData = parseHomeScreen(text);
+  const softwareData = parseSoftwareScreen(text);
+  if (homeData || (softwareData.username && Object.keys(softwareData.softwareItems).length > 0)) {
+    await processVictimData();
+    return;
+  }
 
   await captureSnapshot();
   const updates = parseVictimLogs(text.split("\n"));
@@ -1003,7 +1010,7 @@ document.getElementById("processLogsBtn").addEventListener("click", async () => 
   renderFromDB();
 });
 
-document.getElementById("processVictimBtn").addEventListener("click", async () => {
+async function processVictimData() {
   const text = document.getElementById("dataInput").value;
   if (!text.trim()) return;
 
@@ -1093,7 +1100,7 @@ document.getElementById("processVictimBtn").addEventListener("click", async () =
     await reconcileDatabase();
     renderFromDB();
   };
-});
+}
 
 document.getElementById("clearBtn").addEventListener("click", () => {
   if (!confirm("Are you sure you want to wipe the entire database?")) return;
