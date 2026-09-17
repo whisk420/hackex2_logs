@@ -332,8 +332,7 @@ function initializeRecord(ip) {
     firewall: null,
     encryptor: null,
     wallets: [],
-    downloads: {},
-    uploads: {}
+    downloads: {}
   };
 }
 
@@ -349,7 +348,9 @@ function archiveIngest(type, rawText) {
 
 async function migrateLegacyHistory() {
   const records = await getAllRecords(STORE_NAME);
-  const legacyRecords = records.filter((record) => Array.isArray(record.history) && record.history.length > 0);
+  const legacyRecords = records.filter((record) =>
+    (Array.isArray(record.history) && record.history.length > 0) || Object.prototype.hasOwnProperty.call(record, "uploads")
+  );
   if (legacyRecords.length === 0) return;
 
   return new Promise((resolve, reject) => {
@@ -357,10 +358,12 @@ async function migrateLegacyHistory() {
     const targetStore = tx.objectStore(STORE_NAME);
     const archiveStore = tx.objectStore(ARCHIVE_STORE_NAME);
     for (const record of legacyRecords) {
-      for (const raw of record.history) {
+      const legacyHistory = Array.isArray(record.history) ? record.history : [];
+      for (const raw of legacyHistory) {
         if (typeof raw === "string") archiveStore.add({ type: "logs", raw, importedAt: new Date().toISOString() });
       }
       delete record.history;
+      delete record.uploads;
       targetStore.put(record);
     }
     tx.oncomplete = resolve;
@@ -394,8 +397,7 @@ function mergeTargetRecords(base, incoming) {
     firewall: incoming.firewall || base.firewall || null,
     encryptor: incoming.encryptor || base.encryptor || null,
     wallets: Array.from(new Set([...(base.wallets || []), ...(incoming.wallets || [])])),
-    downloads: { ...(base.downloads || {}), ...(incoming.downloads || {}) },
-    uploads: { ...(base.uploads || {}), ...(incoming.uploads || {}) }
+    downloads: { ...(base.downloads || {}), ...(incoming.downloads || {}) }
   };
 
   return {
@@ -434,9 +436,8 @@ async function mergeUpdates(updates) {
       record.wallets.push(item.wallet);
     }
 
-    if (item.software) {
-      const targetMap = item.isOwnedSoftware ? record.downloads : record.uploads;
-      targetMap[item.software.name] = {
+    if (item.software && item.isOwnedSoftware) {
+      record.downloads[item.software.name] = {
         level: item.software.level,
         status: item.software.action,
         lastSeen: item.time
@@ -573,7 +574,7 @@ function describeRecordDiff(oldRec, newRec) {
   const oldWallets = (oldRec && oldRec.wallets) || [];
   const newWallets = (newRec.wallets || []).filter(w => !oldWallets.includes(w));
   if (newWallets.length > 0) parts.push(`+${newWallets.length} wallet(s)`);
-  for (const mapKey of ["downloads", "uploads"]) {
+  for (const mapKey of ["downloads"]) {
     const aMap = (oldRec && oldRec[mapKey]) || {};
     const bMap = newRec[mapKey] || {};
     for (const name of Object.keys(bMap)) {
@@ -896,16 +897,6 @@ function createCardElement(node) {
       `).join("")
     : "<span style='color:#475569; font-size:12px; font-style: italic;'>No target inventory known</span>";
 
-  const upEntries = Object.entries(node.uploads || {});
-  const upTags = upEntries.length > 0
-    ? upEntries.map(([name, data]) => `
-        <div class="sw-card sw-upload">
-          <span>▲ ${name}</span>
-          <strong>Lv${data.level}</strong>
-        </div>
-      `).join("")
-    : "";
-
   card.innerHTML = `
     <div class="node-meta">
         <span class="ip-title">${displayIp}</span>
@@ -928,10 +919,6 @@ function createCardElement(node) {
       ${walletList}
       <div class="software-section-label">Target Software</div>
       <div class="software-grid">${downTags}</div>
-      ${upTags ? `
-        <div class="software-section-label">Active Deployments</div>
-        <div class="software-grid">${upTags}</div>
-      ` : ""}
     </div>
   `;
 
@@ -1016,13 +1003,47 @@ document.getElementById("processLogsBtn").addEventListener("click", async () => 
   renderFromDB();
 });
 
-document.getElementById("processHomeBtn").addEventListener("click", async () => {
+document.getElementById("processVictimBtn").addEventListener("click", async () => {
   const text = document.getElementById("dataInput").value;
   if (!text.trim()) return;
 
   const parsed = parseHomeScreen(text);
   if (!parsed) {
-    alert("Could not identify a valid IP address in this Home Screen dump.");
+    const software = parseSoftwareScreen(text);
+    if (!software.username) {
+      alert("Could not identify Victim Home or Victim Software data.");
+      return;
+    }
+    if (Object.keys(software.softwareItems).length === 0) {
+      alert("Could not detect any software levels in this Victim Software dump.");
+      return;
+    }
+
+    await captureSnapshot();
+    const allRecords = await new Promise((resolve) => {
+      const tx = db.transaction(STORE_NAME, "readonly");
+      const req = tx.objectStore(STORE_NAME).getAll();
+      req.onsuccess = () => resolve(req.result || []);
+    });
+
+    const targetUser = software.username.trim().toLowerCase();
+    let record = allRecords.find((r) => r.username && r.username.trim().toLowerCase() === targetUser);
+    if (!record) {
+      record = initializeRecord(`unknown:${targetUser}`);
+      record.username = software.username.trim();
+    }
+
+    for (const [name, data] of Object.entries(software.softwareItems)) {
+      record.downloads[name] = data;
+    }
+
+    const writeTx = db.transaction(STORE_NAME, "readwrite");
+    writeTx.objectStore(STORE_NAME).put(record);
+    writeTx.oncomplete = () => {
+      archiveIngest("software", text);
+      document.getElementById("dataInput").value = "";
+      renderFromDB();
+    };
     return;
   }
 
@@ -1070,52 +1091,6 @@ document.getElementById("processHomeBtn").addEventListener("click", async () => 
     archiveIngest("home", text);
     document.getElementById("dataInput").value = "";
     await reconcileDatabase();
-    renderFromDB();
-  };
-});
-
-document.getElementById("processSoftwareBtn").addEventListener("click", async () => {
-  const text = document.getElementById("dataInput").value;
-  if (!text.trim()) return;
-
-  const parsed = parseSoftwareScreen(text);
-  if (!parsed.username) {
-    alert("Could not find username in this Software dump (expected '<Username>'s installed software').");
-    return;
-  }
-
-  if (Object.keys(parsed.softwareItems).length === 0) {
-    alert("Could not detect any software levels in this dump.");
-    return;
-  }
-
-  await captureSnapshot();
-
-  const allRecords = await new Promise((resolve) => {
-    const tx = db.transaction(STORE_NAME, "readonly");
-    const req = tx.objectStore(STORE_NAME).getAll();
-    req.onsuccess = () => resolve(req.result || []);
-  });
-
-  // Normalized matching (case-insensitive, trimmed)
-  const targetUser = parsed.username.trim().toLowerCase();
-  let record = allRecords.find((r) => r.username && r.username.trim().toLowerCase() === targetUser);
-  if (!record) {
-    record = initializeRecord(`unknown:${targetUser}`);
-    record.username = parsed.username.trim();
-  }
-
-  // Merge discovered software into target inventory
-  for (const [name, data] of Object.entries(parsed.softwareItems)) {
-    record.downloads[name] = data;
-  }
-
-  const writeTx = db.transaction(STORE_NAME, "readwrite");
-  writeTx.objectStore(STORE_NAME).put(record);
-
-  writeTx.oncomplete = () => {
-    archiveIngest("software", text);
-    document.getElementById("dataInput").value = "";
     renderFromDB();
   };
 });
@@ -1276,6 +1251,7 @@ async function importDataBundle(file) {
   for (const imported of importedTargets) {
     if (!imported || !imported.ip) continue;
     delete imported.history;
+    delete imported.uploads;
     const existing = targets.get(imported.ip);
     targets.set(imported.ip, existing ? mergeTargetRecords(existing, imported).merged : imported);
   }
