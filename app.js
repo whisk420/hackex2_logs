@@ -310,7 +310,7 @@ function parseHomeScreen(text) {
 
   // 1. Clean Base Username (Line directly after ">")
   let username = null;
-  const afterCaretMatch = text.match(/>\s*\n+([^\n\r_]+)/i);
+  const afterCaretMatch = text.match(/>\s*\n+([^\n\r]+)/i);
   if (afterCaretMatch) {
     username = afterCaretMatch[1].trim();
   }
@@ -755,8 +755,8 @@ async function editTargetIp(oldIp) {
 }
 
 function parseSoftwareScreen(text) {
-  // 1. Support both standard (') and curly (’) apostrophes, and multi-word usernames containing spaces (e.g. "hack Men's installed software")
-  const userMatch = text.match(/([a-zA-Z0-9_-]+(?:[ \t]+[a-zA-Z0-9_-]+)*)['’]s installed software/i);
+  // Capture the complete username from its own header line, including punctuation.
+  const userMatch = text.match(/^([^\r\n]+?)['’]s installed software\s*$/im);
   const username = userMatch ? userMatch[1].trim() : null;
 
   const softwareItems = {};
