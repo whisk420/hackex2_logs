@@ -213,6 +213,34 @@
       text-transform: uppercase;
       letter-spacing: 0.05em;
     }
+    .section-toggle {
+      padding: 0;
+      background: none;
+      color: inherit;
+      font: inherit;
+      text-transform: inherit;
+      letter-spacing: inherit;
+    }
+    .section-toggle:hover { background: none; }
+    .scroll-floater {
+      position: fixed;
+      right: 14px;
+      bottom: 14px;
+      z-index: 10;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .scroll-floater button {
+      width: 42px;
+      height: 38px;
+      padding: 0;
+      font-size: 20px;
+      line-height: 1;
+      background: #1e293b;
+      border: 1px solid #475569;
+    }
+    .scroll-floater button:hover { background: #334155; }
     /* Software Filter Bar */
     .filter-bar {
       display: flex;
@@ -296,8 +324,15 @@
   <div class="section-title" style="color: #60a5fa;">Full Targets</div>
   <div id="fullIpContainer"></div>
 
-  <div class="section-title" style="color: #fbbf24;">Partial / Masked Targets</div>
-  <div id="partialIpContainer"></div>
+  <div class="section-title" style="color: #fbbf24;">
+    <button id="partialToggleBtn" class="section-toggle" aria-expanded="false">v Partial / Masked Targets v</button>
+  </div>
+  <div id="partialIpContainer" hidden></div>
+
+  <div class="scroll-floater" aria-label="Page navigation">
+    <button id="scrollTopBtn" title="Scroll to top" aria-label="Scroll to top">↑</button>
+    <button id="scrollBottomBtn" title="Scroll to bottom" aria-label="Scroll to bottom">↓</button>
+  </div>
 
   <script src="app.js"></script>
 </body>

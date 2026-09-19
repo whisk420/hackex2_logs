@@ -1044,6 +1044,21 @@ document.getElementById("clearFilterBtn").addEventListener("click", () => {
   renderFromDB();
 });
 
+document.getElementById("partialToggleBtn").addEventListener("click", () => {
+  const partialContainer = document.getElementById("partialIpContainer");
+  const isExpanded = partialContainer.hidden;
+  partialContainer.hidden = !isExpanded;
+  document.getElementById("partialToggleBtn").setAttribute("aria-expanded", String(isExpanded));
+});
+
+document.getElementById("scrollTopBtn").addEventListener("click", () => {
+  window.scrollTo({ top: 0, behavior: "smooth" });
+});
+
+document.getElementById("scrollBottomBtn").addEventListener("click", () => {
+  window.scrollTo({ top: document.documentElement.scrollHeight, behavior: "smooth" });
+});
+
 // --- 7. Event Handlers ---
 document.getElementById("processDataBtn").addEventListener("click", async () => {
   const text = document.getElementById("dataInput").value;
