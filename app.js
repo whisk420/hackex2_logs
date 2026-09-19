@@ -963,6 +963,22 @@ function createCardElement(node) {
 
   const toggleBtn = card.querySelector(".toggle-btn");
   const bodySection = card.querySelector(".node-body");
+  const ipTitle = card.querySelector(".ip-title");
+  if (!node.ip.startsWith("unknown:")) {
+    ipTitle.title = "Copy IP address";
+    ipTitle.addEventListener("click", async () => {
+      try {
+        await navigator.clipboard.writeText(node.ip);
+      } catch (err) {
+        const ta = document.createElement("textarea");
+        ta.value = node.ip;
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand("copy");
+        document.body.removeChild(ta);
+      }
+    });
+  }
   toggleBtn.addEventListener("click", () => {
     const isHidden = bodySection.style.display === "none";
     bodySection.style.display = isHidden ? "block" : "none";
