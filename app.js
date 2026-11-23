@@ -590,75 +590,11 @@ async function reconcileDatabase() {
   }
 }
 
-// --- 2b. Change Log (Confirmation Box) ---
-const CHANGE_LOG_MAX = 60;
-let changeLogEntries = []; // newest first: { time, text, kind }
-
+// --- HTML escaping ---
 function escapeHtml(value) {
   return String(value).replace(/[&<>"']/g, ch => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]));
 }
 
-function logChange(text, kind = "ok") {
-  const stamp = new Date().toTimeString().slice(0, 8);
-  changeLogEntries.unshift({ time: stamp, text, kind });
-  if (changeLogEntries.length > CHANGE_LOG_MAX) changeLogEntries.length = CHANGE_LOG_MAX;
-  renderChangeLog();
-}
-
-function clearChangeLog() {
-  changeLogEntries = [];
-  renderChangeLog();
-}
-
-function renderChangeLog() {
-  const box = document.getElementById("changeLogList");
-  if (!box) return;
-  if (changeLogEntries.length === 0) {
-    box.innerHTML = "<li class='cl-empty'>No changes yet — process a log to see what was updated.</li>";
-    return;
-  }
-  box.innerHTML = changeLogEntries.map(e =>
-    `<li class="cl-item cl-${e.kind}"><span class="cl-time">${e.time}</span><span class="cl-text">${escapeHtml(e.text)}</span></li>`
-  ).join("");
-}
-
-// Human-readable diff between two target records (oldRec may be null for brand-new targets)
-function describeRecordDiff(oldRec, newRec) {
-  if (!newRec) return [];
-  const parts = [];
-  if (!oldRec) {
-    parts.push("NEW TARGET");
-  } else {
-    const fieldFmt = [
-      ["username", v => `user ${v}`],
-      ["level", v => `Lv.${v}`],
-      ["hardware", v => v],
-      ["firewall", v => `Firewall Lv.${v}`],
-      ["encryptor", v => `Encryptor Lv.${v}`]
-    ];
-    for (const [key, fmt] of fieldFmt) {
-      const a = oldRec[key];
-      const b = newRec[key];
-      if (!a && b !== undefined && b !== null && b !== "") parts.push(`+${fmt(b)}`);
-      else if (a && !b) parts.push(`-${fmt(a)}`);
-      else if (String(a) !== String(b)) parts.push(`${key} ${fmt(a)}→${fmt(b)}`);
-    }
-  }
-  const oldWallets = (oldRec && oldRec.wallets) || [];
-  const newWallets = (newRec.wallets || []).filter(w => !oldWallets.includes(w));
-  if (newWallets.length > 0) parts.push(`+${newWallets.length} wallet(s)`);
-  for (const mapKey of ["downloads"]) {
-    const aMap = (oldRec && oldRec[mapKey]) || {};
-    const bMap = newRec[mapKey] || {};
-    for (const name of Object.keys(bMap)) {
-      if (!aMap[name]) parts.push(`+${name} Lv.${bMap[name].level}`);
-      else if (String(aMap[name].level) !== String(bMap[name].level)) parts.push(`${name} Lv.${aMap[name].level}→Lv.${bMap[name].level}`);
-    }
-  }
-  return parts;
-}
-
-// --- 2c. Undo / Snapshot System ---
 let previousDatabaseSnapshot = null;
 let lastPastedInputText = "";
 const undoBtn = document.getElementById("undoBtn");
