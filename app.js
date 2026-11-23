@@ -1,7 +1,13 @@
-// --- 1. IndexedDB Initialization ---
-const DB_NAME = "TargetAggregatorMasterDB_v4";
+/* ==========================================================================
+   DARKINDEX // TARGET INTELLIGENCE CONSOLE v2.0
+   HackEx 2 Web Companion & Aggregator
+   ========================================================================== */
+
+// --- 1. Database Configuration & Constants ---
+const DB_NAME = "TargetAggregatorMasterDB_v5";
 const STORE_NAME = "targets";
 const ARCHIVE_STORE_NAME = "ingestArchive";
+const SIPHON_STORE_NAME = "siphonLog";
 let db;
 
 const dbReq = indexedDB.open(DB_NAME, 2);
@@ -14,28 +20,30 @@ dbReq.onupgradeneeded = (e) => {
   if (!d.objectStoreNames.contains(ARCHIVE_STORE_NAME)) {
     d.createObjectStore(ARCHIVE_STORE_NAME, { keyPath: "id", autoIncrement: true });
   }
+  if (!d.objectStoreNames.contains(SIPHON_STORE_NAME)) {
+    d.createObjectStore(SIPHON_STORE_NAME, { keyPath: "ip" });
+  }
 };
 
 dbReq.onsuccess = (e) => {
   db = e.target.result;
-  migrateLegacyHistory().then(renderFromDB);
+  migrateLegacyStores().then(() => {
+    reconcileDatabase().then(renderFromDB);
+  });
 };
 
 dbReq.onerror = (e) => console.error("Database initialization failed:", e);
 
-// --- 2. Software Emojis Map ---
+// --- 2. Software Classifications ---
+const SOFTWARE_DEFENSE = ["Firewall", "Password Encryptor", "Antivirus", "Proxy", "Trace"];
+const SOFTWARE_OFFENSE = ["Bypasser", "Password Cracker", "Keygen"];
+const SOFTWARE_VIRUSES = ["Spam", "Siphon", "Rootkit"];
+
 const SOFTWARE_ICONS = {
-  "Antivirus": "💉",
-  "Spam": "📧",
-  "Rootkit": "🪱",
-  "Firewall": "🛡️",
-  "Bypasser": "🚪",
-  "Password Cracker": "🔨",
-  "Password Encryptor": "🔑",
-  "Proxy": "🎭",
-  "Trace": "📡",
-  "Siphon": "🩸",
-  "Keygen": "⚙️"
+  "Antivirus": "💉", "Spam": "📧", "Rootkit": "🪱",
+  "Firewall": "🛡️", "Bypasser": "🚪", "Password Cracker": "🔨",
+  "Password Encryptor": "🔑", "Proxy": "🎭", "Trace": "📡",
+  "Siphon": "🩸", "Keygen": "⚙️"
 };
 
 function getSoftwareIcon(name) {
@@ -45,14 +53,9 @@ function getSoftwareIcon(name) {
   return "📦";
 }
 
-// --- 3. Regex Helpers ---
-// These are already defined in your code, but let's make sure they're properly used:
+// --- 3. Regex Parsers Module ---
 const REGEX_IP = /\b(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\b/;
 const REGEX_MASKED_IP = /\b(?:\d{1,3}|xxx)\.(?:\d{1,3}|xxx)\.(?:\d{1,3}|xxx)\.(?:\d{1,3}|xxx)\b/;
-
-// Add a more comprehensive pattern for line validation
-const VALID_LOG_LINE_PATTERN = /^\[[0-9]{1,2}-[0-9]{1,2}\s+[0-9]{1,2}:[0-9]{2}\]/;
-
 
 function extractIp(text) {
     // Handle [UNKNOWN] case specifically
@@ -310,22 +313,17 @@ function parseHomeScreen(text) {
   if (!ipMatch) return null;
   const ip = ipMatch[1].trim();
 
-  // 1. Clean Base Username (Line directly after ">")
   let username = null;
   const afterCaretMatch = text.match(/>\s*\n+([^\n\r]+)/i);
-  if (afterCaretMatch) {
-    username = afterCaretMatch[1].trim();
-  }
+  if (afterCaretMatch) username = afterCaretMatch[1].trim();
   if (!username) {
     const compactUserMatch = text.match(/^\/\/\/\s*([^/]+?)\s*\//m);
     if (compactUserMatch) username = compactUserMatch[1].trim();
   }
 
-  // 2. Clan Tag (Optional): Stored separately
-  const clanMatch = text.match(/\[([a-zA-Z0-9_-]{2,6})\]/i);
+  const clanMatch = text.match(/\[([a-zA-Z0-9_-]{2,8})\]/i);
   const clan = clanMatch ? clanMatch[1].trim() : null;
 
-  // 3. Stats & Hardware
   const lvlMatch = text.match(/LVL\s*:?\s*(\d+)/i);
   const level = lvlMatch ? parseInt(lvlMatch[1], 10) : null;
 
@@ -341,15 +339,7 @@ function parseHomeScreen(text) {
   const encMatch = text.match(/ENCRYPTOR\s*:?\s*Lv\.?\s*(\d+)/i);
   const encryptor = encMatch ? parseInt(encMatch[1], 10) : null;
 
-  return {
-    ip,
-    username,
-    clan,
-    level,
-    hardware: device && network ? `${device} • ${network}` : (device || network || null),
-    firewall,
-    encryptor
-  };
+  return { ip, username, clan, level, hardware: device && network ? `${device} • ${network}` : (device || network || null), firewall, encryptor };
 }
 
 // --- 5. Data Merge & Snapshot Management ---
@@ -405,35 +395,80 @@ function archiveIngest(type, rawText) {
     raw: rawText,
     importedAt: new Date().toISOString()
   });
+
+  return { username, softwareItems };
 }
 
-async function migrateLegacyHistory() {
-  const records = await getAllRecords(STORE_NAME);
-  const legacyRecords = records.filter((record) =>
-    (Array.isArray(record.history) && record.history.length > 0) || Object.prototype.hasOwnProperty.call(record, "uploads")
-  );
-  if (legacyRecords.length === 0) return;
+function parseVictimLogs(rawLines) {
+  const updates = [];
+  let lastAccess = null;
 
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction([STORE_NAME, ARCHIVE_STORE_NAME], "readwrite");
-    const targetStore = tx.objectStore(STORE_NAME);
-    const archiveStore = tx.objectStore(ARCHIVE_STORE_NAME);
-    for (const record of legacyRecords) {
-      const legacyHistory = Array.isArray(record.history) ? record.history : [];
-      for (const raw of legacyHistory) {
-        if (typeof raw === "string") archiveStore.add({ type: "logs", raw, importedAt: new Date().toISOString() });
-      }
-      delete record.history;
-      delete record.uploads;
-      targetStore.put(record);
-    }
-    tx.oncomplete = resolve;
-    tx.onerror = () => reject(tx.error);
+  const validLines = rawLines.filter(line => {
+    if (!line.trim() || line.trim().length === 1) return false;
+    return /^\[[0-9]{1,2}-[0-9]{1,2}\s+[0-9]{1,2}:[0-9]{2}\]/.test(line.trim());
   });
+
+  for (let i = validLines.length - 1; i >= 0; i--) {
+    const line = validLines[i].trim();
+    if (!line) continue;
+
+    const timeMatch = line.match(/^\[([^\]]+)\]/);
+    const time = timeMatch ? timeMatch[1] : null;
+    const timeParts = time && time.match(/^(\d{1,2})-(\d{1,2})\s+(\d{1,2}):(\d{2})$/);
+    const eventMinute = timeParts ? (((parseInt(timeParts[1], 10) * 31 + parseInt(timeParts[2], 10)) * 24 + parseInt(timeParts[3], 10)) * 60 + parseInt(timeParts[4], 10)) : null;
+
+    if (line.includes('[UNKNOWN]')) { lastAccess = null; continue; }
+
+    const accessedMatch = line.match(/Device accessed from\s+((?:(?:\d{1,3}|xxx)\.){3}(?:\d{1,3}|xxx))/i) ||
+                          line.match(/Accessed device at\s+((?:(?:\d{1,3}|xxx)\.){3}(?:\d{1,3}|xxx))/i);
+    if (accessedMatch) {
+      const ip = extractIp(accessedMatch[1]);
+      if (ip && ip !== '[UNKNOWN]') {
+        lastAccess = { ip, eventMinute };
+        updates.push({ ip, time, raw: line });
+        continue;
+      }
+    }
+
+    let action = null, level = null, softwareName = null, isOwned = false, targetIp = null;
+    const fromMatch = line.match(/(Downloaded|Uploaded|Downloading|Uploading)\s+Lv(\d+)\s+(.+?)\s+from\s+((?:(?:\d{1,3}|xxx)\.){3}(?:\d{1,3}|xxx))/i);
+    const toMatch = line.match(/(Downloaded|Uploaded|Downloading|Uploading)\s+Lv(\d+)\s+(.+?)\s+to\s+((?:(?:\d{1,3}|xxx)\.){3}(?:\d{1,3}|xxx))/i);
+
+    if (fromMatch) {
+      action = fromMatch[1].toLowerCase(); level = parseInt(fromMatch[2], 10); softwareName = fromMatch[3].trim(); targetIp = extractIp(fromMatch[4]); isOwned = action.startsWith("download");
+    } else if (toMatch) {
+      action = toMatch[1].toLowerCase(); level = parseInt(toMatch[2], 10); softwareName = toMatch[3].trim(); targetIp = extractIp(toMatch[4]); isOwned = action.startsWith("download");
+    }
+
+    const walletMatch = line.match(/(?:Stole\s+(\d[\d,]*)\s+Crypto\s+from|\d[\d,]*\s+Crypto\s+transferred\s+to)\s+(hx[a-zA-Z0-9.]+)/i);
+    if (walletMatch) {
+      const cryptoAmount = walletMatch[1] ? parseInt(walletMatch[1].replace(/,/g, ''), 10) : 0;
+      const wallet = walletMatch[2];
+      if (lastAccess && eventMinute !== null && lastAccess.eventMinute !== null && eventMinute >= lastAccess.eventMinute && eventMinute - lastAccess.eventMinute <= 2) {
+        updates.push({ ip: lastAccess.ip, time, wallet, cryptoAmount, raw: line });
+      }
+      continue;
+    }
+
+    if (targetIp && softwareName) {
+      updates.push({ ip: targetIp, time, software: { action, level, name: softwareName }, isOwnedSoftware: isOwned, raw: line });
+    }
+  }
+  return updates;
+}
+
+// --- 4. Database Operations & Merging ---
+function initializeRecord(ip) {
+  return {
+    ip: ip, username: null, clan: null, level: null, hardware: null,
+    firewall: null, encryptor: null, wallets: [], downloads: {}, theftLogs: [],
+    incomeEstimate: 0, siphonActive: false
+  };
 }
 
 function getAllRecords(storeName) {
   return new Promise((resolve, reject) => {
+    if (!db) return resolve([]);
     const tx = db.transaction(storeName, "readonly");
     const req = tx.objectStore(storeName).getAll();
     req.onsuccess = () => resolve(req.result || []);
@@ -442,13 +477,7 @@ function getAllRecords(storeName) {
 }
 
 function mergeTargetRecords(base, incoming) {
-  const baseIsMasked = base.ip.includes("xxx");
-  const incomingIsMasked = incoming.ip.includes("xxx");
-  const baseIsTemporary = base.ip.startsWith("unknown:");
-  const canonicalIp = ((!incomingIsMasked && baseIsMasked) || (baseIsTemporary && !incomingIsMasked))
-    ? incoming.ip
-    : base.ip;
-
+  const canonicalIp = ((!incoming.ip.includes("xxx") && base.ip.includes("xxx")) || (base.ip.startsWith("unknown:") && !incoming.ip.includes("xxx"))) ? incoming.ip : base.ip;
   const merged = {
     ip: canonicalIp,
     username: incoming.username || base.username || null,
@@ -462,392 +491,162 @@ function mergeTargetRecords(base, incoming) {
     thefts: mergeThefts(base.thefts, incoming.thefts)
   };
 
-  return {
-    merged,
-    oldKeyToDelete: (canonicalIp !== base.ip) ? base.ip : ((canonicalIp !== incoming.ip) ? incoming.ip : null)
-  };
+  // Recalculate income merging both sources
+  merged.incomeEstimate = calculateIncomeFromLogs(merged.theftLogs, merged.walletThefts);
+
+  return { merged, oldKeyToDelete: (canonicalIp !== base.ip) ? base.ip : ((canonicalIp !== incoming.ip) ? incoming.ip : null) };
 }
 
-// Single-pass batch updater without async transaction stall
 async function mergeUpdates(updates) {
   if (!db || updates.length === 0) return;
+  const existingMap = new Map((await getAllRecords(STORE_NAME)).map(r => [r.ip, r]));
 
-  // Read everything first
-  const existingMap = await new Promise((resolve) => {
-    const tx = db.transaction(STORE_NAME, "readonly");
-    const req = tx.objectStore(STORE_NAME).getAll();
-    req.onsuccess = () => {
-      const map = new Map();
-      (req.result || []).forEach((r) => map.set(r.ip, r));
-      resolve(map);
-    };
-    req.onerror = () => resolve(new Map());
-  });
-
-  // Apply updates to in-memory records
   for (const item of updates) {
     if (!item || !item.ip) continue;
-
-    let record = existingMap.get(item.ip);
-    if (!record) {
-      record = initializeRecord(item.ip);
-      existingMap.set(item.ip, record);
-    }
+    let record = existingMap.get(item.ip) || initializeRecord(item.ip);
 
     if (item.wallet) {
-      const previousOwner = Array.from(existingMap.values()).find((candidate) =>
-        candidate.ip !== item.ip && (candidate.wallets || []).includes(item.wallet)
-      );
-      if (previousOwner) {
-        const merged = mergeTargetRecords(record, previousOwner).merged;
+      const prevOwner = Array.from(existingMap.values()).find(c => c.ip !== item.ip && (c.wallets || []).includes(item.wallet));
+      if (prevOwner) {
+        const merged = mergeTargetRecords(record, prevOwner).merged;
         merged.ip = item.ip;
-        existingMap.delete(previousOwner.ip);
+        existingMap.delete(prevOwner.ip);
         record = merged;
-        existingMap.set(item.ip, record);
       }
       if (!record.wallets.includes(item.wallet)) record.wallets.push(item.wallet);
       if (item.theft) record.thefts = mergeThefts(record.thefts, { [item.wallet]: [item.theft] });
     }
 
     if (item.software && item.isOwnedSoftware) {
-      record.downloads[item.software.name] = {
-        level: item.software.level,
-        status: item.software.action,
-        lastSeen: item.time
-      };
+      record.downloads[item.software.name] = { level: item.software.level, status: item.software.action, lastSeen: item.time };
+      if (item.software.name.toLowerCase() === "siphon") record.siphonActive = true;
     }
-
+    existingMap.set(item.ip, record);
   }
 
-  // Write batch back cleanly in one atomic transaction
   return new Promise((resolve) => {
-    const writeTx = db.transaction(STORE_NAME, "readwrite");
-    const writeStore = writeTx.objectStore(STORE_NAME);
-    for (const record of existingMap.values()) {
-      writeStore.put(record);
-    }
-    writeTx.oncomplete = () => resolve();
-    writeTx.onerror = (e) => {
-      console.error("Write transaction error:", e);
-      resolve();
-    };
+    const tx = db.transaction(STORE_NAME, "readwrite");
+    for (const record of existingMap.values()) tx.objectStore(STORE_NAME).put(record);
+    tx.oncomplete = resolve;
   });
 }
 
-// Deduplication Reconciliation
 async function reconcileDatabase() {
   if (!db) return;
-
-  const records = await new Promise((resolve) => {
-    const tx = db.transaction(STORE_NAME, "readonly");
-    const req = tx.objectStore(STORE_NAME).getAll();
-    req.onsuccess = () => resolve(req.result || []);
-    req.onerror = () => resolve([]);
-  });
-
-  if (!records || records.length < 2) return;
-
+  const records = await getAllRecords(STORE_NAME);
   const toDelete = new Set();
   const toPut = [];
 
   for (let i = 0; i < records.length; i++) {
     for (let j = i + 1; j < records.length; j++) {
-      const recA = records[i];
-      const recB = records[j];
-
-      if (!recA || !recB) continue;
-
-      const sharesUser = recA.username && recB.username &&
-        recA.username.toLowerCase() === recB.username.toLowerCase();
-      const sharesWallet = (recA.wallets || []).some((w) => (recB.wallets || []).includes(w));
-
+      const a = records[i], b = records[j];
+      const sharesUser = a.username && b.username && a.username.toLowerCase() === b.username.toLowerCase();
+      const sharesWallet = (a.wallets || []).some((w) => (b.wallets || []).includes(w));
       if (sharesUser || sharesWallet) {
-        const mergeResult = mergeTargetRecords(recA, recB);
-        const finalMerged = mergeResult.merged;
-
-        toPut.push(finalMerged);
-        const obsoleteKey = (finalMerged.ip === recA.ip) ? recB.ip : recA.ip;
-        toDelete.add(obsoleteKey);
-
-        records[i] = finalMerged;
-        records.splice(j, 1);
-        j--;
+        const { merged, oldKeyToDelete } = mergeTargetRecords(a, b);
+        toPut.push(merged);
+        toDelete.add(oldKeyToDelete || (merged.ip === a.ip ? b.ip : a.ip));
+        records[i] = merged; records.splice(j, 1); j--;
       }
     }
   }
 
   if (toPut.length > 0 || toDelete.size > 0) {
     return new Promise((resolve) => {
-      const writeTx = db.transaction(STORE_NAME, "readwrite");
-      const writeStore = writeTx.objectStore(STORE_NAME);
-
-      for (const key of toDelete) writeStore.delete(key);
-      for (const record of toPut) writeStore.put(record);
-
-      writeTx.oncomplete = () => resolve();
-      writeTx.onerror = () => resolve();
+      const tx = db.transaction(STORE_NAME, "readwrite");
+      for (const key of toDelete) if (key) tx.objectStore(STORE_NAME).delete(key);
+      for (const record of toPut) tx.objectStore(STORE_NAME).put(record);
+      tx.oncomplete = resolve;
     });
   }
 }
 
-// --- 2b. Change Log (Confirmation Box) ---
-const CHANGE_LOG_MAX = 60;
-let changeLogEntries = []; // newest first: { time, text, kind }
-
-function escapeHtml(value) {
-  return String(value).replace(/[&<>"']/g, ch => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]));
-}
-
-function logChange(text, kind = "ok") {
-  const stamp = new Date().toTimeString().slice(0, 8);
-  changeLogEntries.unshift({ time: stamp, text, kind });
-  if (changeLogEntries.length > CHANGE_LOG_MAX) changeLogEntries.length = CHANGE_LOG_MAX;
-  renderChangeLog();
-}
-
-function clearChangeLog() {
-  changeLogEntries = [];
-  renderChangeLog();
-}
-
-function renderChangeLog() {
-  const box = document.getElementById("changeLogList");
-  if (!box) return;
-  if (changeLogEntries.length === 0) {
-    box.innerHTML = "<li class='cl-empty'>No changes yet — process a log to see what was updated.</li>";
-    return;
-  }
-  box.innerHTML = changeLogEntries.map(e =>
-    `<li class="cl-item cl-${e.kind}"><span class="cl-time">${e.time}</span><span class="cl-text">${escapeHtml(e.text)}</span></li>`
-  ).join("");
-}
-
-// Human-readable diff between two target records (oldRec may be null for brand-new targets)
-function describeRecordDiff(oldRec, newRec) {
-  if (!newRec) return [];
-  const parts = [];
-  if (!oldRec) {
-    parts.push("NEW TARGET");
-  } else {
-    const fieldFmt = [
-      ["username", v => `user ${v}`],
-      ["level", v => `Lv.${v}`],
-      ["hardware", v => v],
-      ["firewall", v => `Firewall Lv.${v}`],
-      ["encryptor", v => `Encryptor Lv.${v}`]
-    ];
-    for (const [key, fmt] of fieldFmt) {
-      const a = oldRec[key];
-      const b = newRec[key];
-      if (!a && b !== undefined && b !== null && b !== "") parts.push(`+${fmt(b)}`);
-      else if (a && !b) parts.push(`-${fmt(a)}`);
-      else if (String(a) !== String(b)) parts.push(`${key} ${fmt(a)}→${fmt(b)}`);
-    }
-  }
-  const oldWallets = (oldRec && oldRec.wallets) || [];
-  const newWallets = (newRec.wallets || []).filter(w => !oldWallets.includes(w));
-  if (newWallets.length > 0) parts.push(`+${newWallets.length} wallet(s)`);
-  for (const mapKey of ["downloads"]) {
-    const aMap = (oldRec && oldRec[mapKey]) || {};
-    const bMap = newRec[mapKey] || {};
-    for (const name of Object.keys(bMap)) {
-      if (!aMap[name]) parts.push(`+${name} Lv.${bMap[name].level}`);
-      else if (String(aMap[name].level) !== String(bMap[name].level)) parts.push(`${name} Lv.${aMap[name].level}→Lv.${bMap[name].level}`);
-    }
-  }
-  return parts;
-}
-
-// --- 2c. Undo / Snapshot System ---
-let previousDatabaseSnapshot = null;
-let lastPastedInputText = "";
-const undoBtn = document.getElementById("undoBtn");
-
-async function captureSnapshot() {
-  if (!db) return;
+async function migrateLegacyStores() {
+  const records = await getAllRecords(STORE_NAME);
+  const legacy = records.filter((r) => r.history || r.uploads);
+  if (legacy.length === 0) return;
   return new Promise((resolve) => {
-    const tx = db.transaction(STORE_NAME, "readonly");
-    const req = tx.objectStore(STORE_NAME).getAll();
-    req.onsuccess = () => {
-      previousDatabaseSnapshot = JSON.parse(JSON.stringify(req.result || []));
-      lastPastedInputText = document.getElementById("dataInput").value;
-      if (undoBtn) {
-        undoBtn.disabled = false;
-        undoBtn.style.background = "#ca8a04";
+    const tx = db.transaction([STORE_NAME, ARCHIVE_STORE_NAME], "readwrite");
+    const targetStore = tx.objectStore(STORE_NAME);
+    const archiveStore = tx.objectStore(ARCHIVE_STORE_NAME);
+    for (const record of legacy) {
+      if (Array.isArray(record.history)) {
+        for (const raw of record.history) if (typeof raw === "string") archiveStore.add({ type: "logs", raw, importedAt: new Date().toISOString() });
       }
-      resolve();
-    };
-    req.onerror = () => resolve();
+      delete record.history; delete record.uploads;
+      targetStore.put(record);
+    }
+    tx.oncomplete = resolve;
   });
 }
 
-async function restoreSnapshot() {
-  if (!previousDatabaseSnapshot || !db) return;
-
-  const writeTx = db.transaction(STORE_NAME, "readwrite");
-  const store = writeTx.objectStore(STORE_NAME);
-  store.clear();
-
-  for (const record of previousDatabaseSnapshot) {
-    store.put(record);
-  }
-
-  writeTx.oncomplete = () => {
-    document.getElementById("dataInput").value = lastPastedInputText;
-    previousDatabaseSnapshot = null;
-    if (undoBtn) {
-      undoBtn.disabled = true;
-      undoBtn.style.background = "#475569";
-    }
-    renderFromDB();
-  };
+function archiveIngest(type, rawText) {
+  if (!db || !rawText.trim()) return;
+  db.transaction(ARCHIVE_STORE_NAME, "readwrite").objectStore(ARCHIVE_STORE_NAME).add({ type, raw: rawText, importedAt: new Date().toISOString() });
 }
 
-if (undoBtn) undoBtn.addEventListener("click", restoreSnapshot);
+// --- 5. Game Mathematics & Income Estimator ---
+function calculateIncomeFromLogs(theftLogs, walletThefts) {
+  // Support both new `theftLogs` array and imported DarkIndex `walletThefts` map
+  const allEvents = [...(theftLogs || [])];
 
-// --- 6. Card UI & Action Helpers ---
-function deleteTarget(ip, cardElement) {
-  if (!confirm(`Delete target ${ip}?`)) return;
-  const tx = db.transaction(STORE_NAME, "readwrite");
-  tx.objectStore(STORE_NAME).delete(ip);
-  tx.oncomplete = () => {
-    if (cardElement) cardElement.remove();
-  };
-}
-
-async function shareTarget(node) {
-  const lines = [`TARGET: ${node.ip}`];
-  if (node.username) lines.push(`User: ${node.username}`);
-  if (node.firewall) lines.push(`Firewall: Lv.${node.firewall}`);
-  if (node.encryptor) lines.push(`Encryptor: Lv.${node.encryptor}`);
-
-  const softwareEntries = Object.entries(node.downloads || {});
-  if (softwareEntries.length > 0) {
-    lines.push("\nSoftware:");
-    softwareEntries.forEach(([name, data]) => {
-      lines.push(`• ${name} Lv.${data.level}`);
+  if (walletThefts && typeof walletThefts === "object") {
+    Object.values(walletThefts).forEach(events => {
+      if (Array.isArray(events)) {
+        events.forEach(e => {
+          if (e.timestampMs) allEvents.push({ timestampMs: e.timestampMs, amount: e.amount });
+        });
+      }
     });
   }
 
-  const payload = lines.join("\n");
-  try {
-    await navigator.clipboard.writeText(payload);
-    alert(`Copied report for ${node.ip} to clipboard!`);
-  } catch (err) {
-    const ta = document.createElement("textarea");
-    ta.value = payload;
-    document.body.appendChild(ta);
-    ta.select();
-    document.execCommand("copy");
-    document.body.removeChild(ta);
-    alert(`Copied report for ${node.ip} to clipboard!`);
-  }
-}
+  if (allEvents.length < 2) return 0;
 
-async function editTargetIp(oldIp) {
-  const newIpInput = prompt(`Enter new IP address for ${oldIp}:`, oldIp);
-  if (!newIpInput) return;
-
-  const validIp = extractIp(newIpInput.trim());
-  if (!validIp) {
-    alert("Invalid IP format entered.");
-    return;
-  }
-  if (validIp === oldIp) return;
-
-  await captureSnapshot();
-
-  const allRecords = await new Promise((resolve) => {
-    const tx = db.transaction(STORE_NAME, "readonly");
-    const req = tx.objectStore(STORE_NAME).getAll();
-    req.onsuccess = () => resolve(req.result || []);
+  // Sort by time
+  allEvents.sort((a, b) => {
+    const timeA = a.timestampMs ? a.timestampMs : (parseTimestampMinute(a.time) * 60000);
+    const timeB = b.timestampMs ? b.timestampMs : (parseTimestampMinute(b.time) * 60000);
+    return timeA - timeB;
   });
 
-  const existing = allRecords.find((r) => r.ip === oldIp);
-  if (!existing) return;
+  const sessions = [];
+  let currentSession = [allEvents[0]];
 
-  const collision = allRecords.find((r) => r.ip === validIp);
+  for (let i = 1; i < allEvents.length; i++) {
+    const t1 = allEvents[i - 1].timestampMs ? allEvents[i - 1].timestampMs : (parseTimestampMinute(allEvents[i - 1].time) * 60000);
+    const t2 = allEvents[i].timestampMs ? allEvents[i].timestampMs : (parseTimestampMinute(allEvents[i].time) * 60000);
 
-  const writeTx = db.transaction(STORE_NAME, "readwrite");
-  const store = writeTx.objectStore(STORE_NAME);
-
-  store.delete(oldIp);
-
-  if (collision) {
-    existing.ip = validIp;
-    const mergeResult = mergeTargetRecords(collision, existing);
-    store.put(mergeResult.merged);
-  } else {
-    existing.ip = validIp;
-    store.put(existing);
-  }
-
-  writeTx.oncomplete = async () => {
-    await reconcileDatabase();
-    renderFromDB();
-  };
-}
-
-function parseSoftwareScreen(text) {
-  // Capture the complete username from its own header line, including punctuation.
-  const userMatch = text.match(/^([^\r\n]+?)['’]s installed software\s*$/im);
-  const username = userMatch ? userMatch[1].trim() : null;
-
-  const softwareItems = {};
-  const validNames = [
-    "Antivirus", "Spam", "Rootkit", "Firewall", "Bypasser",
-    "Password Cracker", "Password Encryptor", "Proxy", "Trace",
-    "Siphon"
-  ];
-
-  // 2. Normalize and scan by tool name
-  validNames.forEach((name) => {
-    const pattern = new RegExp(
-      "\\b" + name.replace(/\s+/g, "\\s+") + "\\b[\\s\\S]*?LVL\\s*(\\d+)",
-      "i"
-    );
-    const match = text.match(pattern);
-    if (match) {
-      softwareItems[name] = {
-        level: parseInt(match[1], 10),
-        status: "installed"
-      };
+    const gapHours = Math.abs(t2 - t1) / 3600000.0;
+    if (gapHours > 1) {
+      sessions.push(currentSession);
+      currentSession = [allEvents[i]];
+    } else {
+      currentSession.push(allEvents[i]);
     }
-  });
-
-  return { username, softwareItems };
-}
-
-function compareIps(ipA, ipB) {
-  const octA = ipA.split(".");
-  const octB = ipB.split(".");
-  for (let i = 0; i < 4; i++) {
-    const valA = octA[i] === "xxx" ? -1 : parseInt(octA[i], 10);
-    const valB = octB[i] === "xxx" ? -1 : parseInt(octB[i], 10);
-    if (valA !== valB) return valA - valB;
   }
-  return 0;
+  sessions.push(currentSession);
+
+  let totalIncome = 0, totalHours = 0;
+  for (const sess of sessions) {
+    if (sess.length < 2) continue;
+    const tStart = sess[0].timestampMs ? sess[0].timestampMs : (parseTimestampMinute(sess[0].time) * 60000);
+    const tEnd = sess[sess.length - 1].timestampMs ? sess[sess.length - 1].timestampMs : (parseTimestampMinute(sess[sess.length - 1].time) * 60000);
+    const durationHours = Math.max((tEnd - tStart) / 3600000.0, 0.25);
+
+    // Sum everything except the very first theft (as that begins the timer)
+    const sessionStolen = sess.slice(1).reduce((sum, entry) => sum + (entry.amount || 0), 0);
+
+    totalIncome += sessionStolen;
+    totalHours += durationHours;
+  }
+
+  return Math.min(totalHours > 0 ? (totalIncome / totalHours) : 0, 100);
 }
 
-// --- Software Filter Query Parsing & Matching ---
-const KNOWN_SOFTWARE_NAMES = [
-  "Password Cracker", "Password Encryptor",
-  ...new Set(Object.keys(SOFTWARE_ICONS))
-].sort((a, b) => b.length - a.length); // Longest first so multi-word names win
-
-// Extracts a level from single tokens like "Lv.9", "LV3" or "LVL9" — null if not one.
-function parseLevelToken(token) {
-  const m = String(token).match(/^lv(?:l)?\.?\s*(\d+)$/i);
-  return m ? parseInt(m[1], 10) : null;
-}
-
-// True for a bare "lv" / "lvl" word whose number arrives in the next token.
-function isLevelWord(token) {
-  return /^(?:lv|lvl)$/.test(String(token).toLowerCase());
-}
-
-function isIpToken(token) {
-  return /^(?:(?:\d{1,3}|xxx)\.){3}(?:\d{1,3}|xxx)$/i.test(String(token));
+function parseTimestampMinute(ts) {
+  const m = ts?.match(/(\d{1,2})-(\d{1,2})\s+(\d{1,2}):(\d{2})/);
+  // Estimate minutes from start of year
+  return m ? (((parseInt(m[1]) * 31 + parseInt(m[2])) * 24 + parseInt(m[3])) * 60) + parseInt(m[4]) : 0;
 }
 
 // DarkIndex-style aliases for app names.
@@ -863,12 +662,10 @@ const LOOT_APPS = ["Password Encryptor", "Antivirus", "Proxy", "Trace", "Bypasse
 // Examples: "Bypasser Lv.9" | "Spam Lv.3 Bypasser" | "lvl 28-32" | "sw 20" | "fw 12" | "user:Bob" | "wallet:hx12"
 function parseSoftwareQuery(query) {
   if (!query || !query.trim()) return null;
-
-  const groups = query.split("|").map((groupText) => {
+  return query.split("|").map((groupText) => {
     const tokens = groupText.trim().split(/\s+/).filter(Boolean);
     const conditions = [];
     let i = 0;
-
     while (i < tokens.length) {
       const tok = tokens[i];
       const lower = tok.toLowerCase();
@@ -926,36 +723,20 @@ function parseSoftwareQuery(query) {
         continue;
       }
 
-      // Try to match a known software name greedily across consecutive tokens
-      let matchedName = null;
-      for (const candidate of KNOWN_SOFTWARE_NAMES) {
-        const words = candidate.split(" ");
-        if (i + words.length > tokens.length) continue;
-        const slice = tokens.slice(i, i + words.length).join(" ").toLowerCase();
-        if (slice === candidate.toLowerCase()) {
-          matchedName = candidate;
-          break;
-        }
-      }
+      const lvlMatch = token.match(/^(?:lvl|level)\.?\s*(\d+)$/i) || ((token === "lvl" || token === "level") && tokens[i+1] ? [null, tokens[i+1]] : null);
+      if (lvlMatch && /^\d+$/.test(lvlMatch[1])) { conditions.push({ type: "shortcut", value: "lvl", minLevel: parseInt(lvlMatch[1]) }); i += token.includes(lvlMatch[1]) ? 1 : 2; continue; }
 
-      let level = null;
-      if (matchedName) {
-        i += matchedName.split(" ").length;
-        // Optional level spec right after the name: "Lv.9", "LVL 3" or a bare number ("Bypasser 9")
-        if (tokens[i]) {
-          const single = parseLevelToken(tokens[i]);
-          if (single !== null) {
-            level = single;
-            i++;
-          } else if (isLevelWord(tokens[i]) && tokens[i + 1] && /^\d+$/.test(tokens[i + 1])) {
-            // "Bypasser LVL 9" — word and number split across two tokens
-            level = parseInt(tokens[i + 1], 10);
-            i += 2;
-          } else if (/^\d+$/.test(tokens[i])) {
-            level = parseInt(tokens[i], 10);
-            i++;
-          }
-        }
+      const fwMatch = token.match(/^(?:fw|firewall)\.?\s*(\d+)$/i) || ((token === "fw" || token === "firewall") && tokens[i+1] ? [null, tokens[i+1]] : null);
+      if (fwMatch && /^\d+$/.test(fwMatch[1])) { conditions.push({ type: "shortcut", value: "fw", maxFw: parseInt(fwMatch[1]) }); i += token.includes(fwMatch[1]) ? 1 : 2; continue; }
+
+      if (token === "spam" && tokens[i + 1] && /^\d+$/.test(tokens[i + 1])) { conditions.push({ type: "shortcut", value: "spam", minSpam: parseInt(tokens[i + 1]) }); i += 2; continue; }
+      if (/^(?:(?:\d{1,3}|xxx)\.){3}(?:\d{1,3}|xxx)$/i.test(token)) { conditions.push({ type: "ip", value: token }); i++; continue; }
+
+      const known = [...SOFTWARE_DEFENSE, ...SOFTWARE_OFFENSE, ...SOFTWARE_VIRUSES].find(s => token.includes(s.toLowerCase()));
+      if (known) {
+        let lvl = null;
+        if (tokens[i+1] && /^\d+$/.test(tokens[i+1])) { lvl = parseInt(tokens[i+1]); i++; }
+        conditions.push({ type: "software", name: known.toLowerCase(), level: lvl });
       } else {
         // Bare token: free text (username/clan/wallet/hardware) or a partial app name; stray level words / numbers are ignored
         const lvlOnly = parseLevelToken(tokens[i]) !== null || isLevelWord(tokens[i]);
@@ -965,11 +746,8 @@ function parseSoftwareQuery(query) {
 
       if (matchedName) conditions.push({ type: "software", name: matchedName.toLowerCase(), level, spread: 0 });
     }
-
     return conditions;
-  }).filter((conditions) => conditions.length > 0);
-
-  return groups.length > 0 ? groups : null;
+  }).filter((group) => group.length > 0);
 }
 
 function findDownload(record, name) {
@@ -1117,40 +895,72 @@ function createCardElement(node) {
       <div class="software-section-label">Target Software</div>
       <div class="software-grid">${downTags}</div>
     </div>
+
+    <!-- ROW 3: Intelligence Divider -->
+    ${intelChips}
+
+    <!-- ROW 4: Body Columns -->
+    <div class="flex items-start justify-between w-full pt-2 gap-2">
+      ${defHtml}${offHtml}${virHtml}${noSoftware}
+    </div>
   `;
 
-  const toggleBtn = card.querySelector(".toggle-btn");
-  const bodySection = card.querySelector(".node-body");
-  const ipTitle = card.querySelector(".ip-title");
-  if (!node.ip.startsWith("unknown:")) {
-    ipTitle.title = "Copy IP address";
-    ipTitle.addEventListener("click", async () => {
-      try {
-        await navigator.clipboard.writeText(node.ip);
-      } catch (err) {
-        const ta = document.createElement("textarea");
-        ta.value = node.ip;
-        document.body.appendChild(ta);
-        ta.select();
-        document.execCommand("copy");
-        document.body.removeChild(ta);
-      }
-    });
-  }
-  toggleBtn.addEventListener("click", () => {
-    const isHidden = bodySection.style.display === "none";
-    bodySection.style.display = isHidden ? "block" : "none";
-    toggleBtn.textContent = isHidden ? "Hide" : "Expand";
-  });
-
+  // Attach Hover Overlay Actions
   card.querySelector(".edit-btn").addEventListener("click", () => editTargetIp(node.ip));
   card.querySelector(".share-btn").addEventListener("click", () => shareTarget(node));
   card.querySelector(".del-btn").addEventListener("click", () => deleteTarget(node.ip, card));
 
+  // Double click toggles active state on mobile since there is no hover
+  card.addEventListener("dblclick", () => {
+    card.querySelector(".action-overlay").classList.toggle("active");
+  });
+
   return card;
 }
 
-function renderFromDB() {
+// --- 10. Database Rendering Engine (Virtual Chunking) ---
+let renderState = { fullIps: [], partialIps: [], fullRendered: 0, partialRendered: 0, activeGroups: null };
+const CHUNK_SIZE = 50;
+
+const lazyObserver = new IntersectionObserver((entries) => {
+  entries.forEach(entry => {
+    if (entry.isIntersecting) {
+      const sentinel = entry.target;
+      lazyObserver.unobserve(sentinel);
+      const containerId = sentinel.parentElement.id;
+      sentinel.remove();
+      if (containerId === "fullIpContainer") renderNextChunk('full');
+      else if (containerId === "partialIpContainer") renderNextChunk('partial');
+    }
+  });
+}, { rootMargin: "300px" });
+
+function renderNextChunk(type) {
+  const container = document.getElementById(type === 'full' ? 'fullIpContainer' : 'partialIpContainer');
+  const ips = type === 'full' ? renderState.fullIps : renderState.partialIps;
+  const rendered = type === 'full' ? renderState.fullRendered : renderState.partialRendered;
+
+  const fragment = document.createDocumentFragment();
+  const end = Math.min(rendered + CHUNK_SIZE, ips.length);
+
+  for (let i = rendered; i < end; i++) {
+    fragment.appendChild(createCardElement(ips[i], renderState.activeGroups));
+  }
+
+  container.appendChild(fragment);
+  if (type === 'full') renderState.fullRendered = end;
+  else renderState.partialRendered = end;
+
+  if (end < ips.length) {
+    const sentinel = document.createElement("div");
+    sentinel.className = "col-span-full py-4 w-full flex items-center justify-center text-sky-500 font-mono text-xs loading-sentinel";
+    sentinel.innerHTML = `<span class="animate-pulse">Loading more targets... (${end}/${ips.length})</span>`;
+    container.appendChild(sentinel);
+    lazyObserver.observe(sentinel);
+  }
+}
+
+async function renderFromDB() {
   if (!db) return;
 
   const fullContainer = document.getElementById("fullIpContainer");
@@ -1158,8 +968,7 @@ function renderFromDB() {
   const filterInput = document.getElementById("softwareFilterInput");
   const activeGroups = parseSoftwareQuery(filterInput.value);
 
-  fullContainer.innerHTML = "";
-  partialContainer.innerHTML = "";
+  fullContainer.innerHTML = ""; partialContainer.innerHTML = "";
 
   const tx = db.transaction(STORE_NAME, "readonly");
   const store = tx.objectStore(STORE_NAME);
@@ -1210,17 +1019,21 @@ function renderFromDB() {
     if (fullIps.length === 0) fullContainer.innerHTML = "<p style='color:#475569; font-size:13px;'>No full targets recorded.</p>";
     else fullIps.forEach((n) => fullContainer.appendChild(createCardElement(n)));
 
-    if (partialIps.length === 0) partialContainer.innerHTML = "<p style='color:#475569; font-size:13px;'>No partial targets recorded.</p>";
-    else partialIps.forEach((n) => partialContainer.appendChild(createCardElement(n)));
-  };
-}
+  document.getElementById("statTotalTargets").textContent = records.length;
+  document.getElementById("statActiveSiphons").textContent = activeSiphons;
+  document.getElementById("statTotalWallets").textContent = totalWallets;
+  document.getElementById("statEstIncome").textContent = `$${totalEstIncome.toFixed(0)}/hr`;
+  document.getElementById("fullTargetCount").textContent = fullIps.length;
+  document.getElementById("partialTargetCount").textContent = partialIps.length;
 
-// Live software filtering
-document.getElementById("softwareFilterInput").addEventListener("input", () => renderFromDB());
-document.getElementById("clearFilterBtn").addEventListener("click", () => {
-  document.getElementById("softwareFilterInput").value = "";
-  renderFromDB();
-});
+  const ipSorter = (a, b) => {
+    const oa = a.ip.split('.'), ob = b.ip.split('.');
+    for (let i=0; i<4; i++) {
+      const va = oa[i]==="xxx"?-1:parseInt(oa[i]||0), vb = ob[i]==="xxx"?-1:parseInt(ob[i]||0);
+      if (va !== vb) return va - vb;
+    }
+    return 0;
+  };
 
 document.getElementById("advancedToggle").addEventListener("change", () => renderFromDB());
 document.getElementById("sortSelect").addEventListener("change", () => renderFromDB());
@@ -1253,134 +1066,215 @@ document.getElementById("partialToggleBtn").addEventListener("click", () => {
   document.getElementById("partialToggleBtn").setAttribute("aria-expanded", String(isExpanded));
 });
 
-document.getElementById("scrollTopBtn").addEventListener("click", () => {
-  window.scrollTo({ top: 0, behavior: "smooth" });
-});
+  renderState = { fullIps, partialIps, fullRendered: 0, partialRendered: 0, activeGroups };
 
-document.getElementById("scrollBottomBtn").addEventListener("click", () => {
-  window.scrollTo({ top: document.documentElement.scrollHeight, behavior: "smooth" });
-});
-
-// --- 7. Event Handlers ---
-document.getElementById("processDataBtn").addEventListener("click", async () => {
-  const text = document.getElementById("dataInput").value;
-  if (!text.trim()) return;
-
-  const homeData = parseHomeScreen(text);
-  const softwareData = parseSoftwareScreen(text);
-  if (homeData || (softwareData.username && Object.keys(softwareData.softwareItems).length > 0)) {
-    await processVictimData();
+  if (activeGroups && fullIps.length === 0 && partialIps.length === 0) {
+    fullContainer.innerHTML = `<div class="col-span-full p-6 text-center text-amber-500 font-mono text-sm bg-amber-950/20 border border-amber-900/30 rounded-xl">No targets match filter criteria.</div>`;
     return;
   }
 
-  await captureSnapshot();
-  const updates = parseVictimLogs(text.split("\n"));
-  await mergeUpdates(updates);
-  archiveIngest("logs", text);
-  document.getElementById("dataInput").value = "";
-  await reconcileDatabase();
-  renderFromDB();
-});
+  if (fullIps.length > 0) renderNextChunk('full');
+  else fullContainer.innerHTML = `<div class="col-span-full p-6 text-center text-slate-500 font-mono text-sm bg-cyber-card border border-cyber-border rounded-xl">No complete targets indexed yet. Paste logs or home screens to ingest data.</div>`;
 
-async function processVictimData() {
-  const text = document.getElementById("dataInput").value;
-  if (!text.trim()) return;
-
-  const parsed = parseHomeScreen(text);
-  if (!parsed) {
-    const software = parseSoftwareScreen(text);
-    if (!software.username) {
-      alert("Could not identify Victim Home or Victim Software data.");
-      return;
-    }
-    if (Object.keys(software.softwareItems).length === 0) {
-      alert("Could not detect any software levels in this Victim Software dump.");
-      return;
-    }
-
-    await captureSnapshot();
-    const allRecords = await new Promise((resolve) => {
-      const tx = db.transaction(STORE_NAME, "readonly");
-      const req = tx.objectStore(STORE_NAME).getAll();
-      req.onsuccess = () => resolve(req.result || []);
-    });
-
-    const targetUser = software.username.trim().toLowerCase();
-    let record = allRecords.find((r) => r.username && r.username.trim().toLowerCase() === targetUser);
-    if (!record) {
-      record = initializeRecord(`unknown:${targetUser}`);
-      record.username = software.username.trim();
-    }
-
-    for (const [name, data] of Object.entries(software.softwareItems)) {
-      record.downloads[name] = data;
-    }
-
-    const writeTx = db.transaction(STORE_NAME, "readwrite");
-    writeTx.objectStore(STORE_NAME).put(record);
-    writeTx.oncomplete = () => {
-      archiveIngest("software", text);
-      document.getElementById("dataInput").value = "";
-      renderFromDB();
-    };
-    return;
-  }
-
-  await captureSnapshot();
-
-  const allRecords = await new Promise((resolve) => {
-    const tx = db.transaction(STORE_NAME, "readonly");
-    const req = tx.objectStore(STORE_NAME).getAll();
-    req.onsuccess = () => resolve(req.result || []);
-  });
-
-  const existing = allRecords.find((r) => r.ip === parsed.ip || (parsed.username && r.username && r.username.toLowerCase() === parsed.username.toLowerCase()));
-
-  const incoming = initializeRecord(parsed.ip);
-  incoming.username = parsed.username;
-  incoming.level = parsed.level;
-  incoming.hardware = parsed.hardware;
-  if (parsed.firewall) {
-    incoming.firewall = parsed.firewall;
-    incoming.downloads["Firewall"] = { level: parsed.firewall, status: "installed" };
-  }
-  if (parsed.encryptor) {
-    incoming.encryptor = parsed.encryptor;
-    incoming.downloads["Password Encryptor"] = { level: parsed.encryptor, status: "installed" };
-  }
-
-  let finalRecord = incoming;
-  let oldKeyToDelete = null;
-
-  if (existing) {
-    const mergeResult = mergeTargetRecords(existing, incoming);
-    finalRecord = mergeResult.merged;
-    oldKeyToDelete = mergeResult.oldKeyToDelete;
-  }
-
-  const writeTx = db.transaction(STORE_NAME, "readwrite");
-  const store = writeTx.objectStore(STORE_NAME);
-
-  if (oldKeyToDelete && oldKeyToDelete !== finalRecord.ip) {
-    store.delete(oldKeyToDelete);
-  }
-  store.put(finalRecord);
-
-  writeTx.oncomplete = async () => {
-    archiveIngest("home", text);
-    document.getElementById("dataInput").value = "";
-    await reconcileDatabase();
-    renderFromDB();
-  };
+  if (partialIps.length > 0) renderNextChunk('partial');
+  else partialContainer.innerHTML = `<div class="col-span-full p-6 text-center text-slate-500 font-mono text-sm bg-cyber-card border border-cyber-border rounded-xl">No partial targets recorded.</div>`;
 }
 
-document.getElementById("clearBtn").addEventListener("click", () => {
-  if (!confirm("Are you sure you want to wipe the entire database?")) return;
-  const tx = db.transaction([STORE_NAME, ARCHIVE_STORE_NAME], "readwrite");
-  tx.objectStore(STORE_NAME).clear();
-  tx.objectStore(ARCHIVE_STORE_NAME).clear();
-  tx.oncomplete = () => renderFromDB();
-});
+// --- 11. Knowledge Base Initialization ---
+function initKnowledgeBase() {
+  const modal = document.getElementById("kbModal");
+  const closeBtn = document.getElementById("kbCloseBtn");
+  const toggleBtn = document.getElementById("kbToggleBtn");
+  const navArea = document.getElementById("kbNav");
+  const contentArea = document.getElementById("kbContentArea");
+
+  if (typeof KB_DATA === 'undefined' || !Array.isArray(KB_DATA)) {
+    console.warn("Knowledge base data not found or invalid format.");
+    return;
+  }
+
+  // Generate Navigation
+  navArea.innerHTML = KB_DATA.map((topic, index) => `
+    <button class="kb-nav-item w-full text-left flex items-center gap-3 ${index === 0 ? 'active' : ''}" data-kb-id="${topic.id}">
+      <span class="text-xl">${topic.icon}</span>
+      <span class="font-bold truncate">${escapeHtml(topic.title)}</span>
+    </button>
+  `).join("");
+
+  function renderTopic(topicId) {
+    const topic = KB_DATA.find(t => t.id === topicId);
+    if (!topic) return;
+
+    // Remove active state from all navs
+    document.querySelectorAll(".kb-nav-item").forEach(el => el.classList.remove("active"));
+    document.querySelector(`.kb-nav-item[data-kb-id="${topicId}"]`)?.classList.add("active");
+
+    let html = `
+      <div class="border-b border-cyber-border pb-4 mb-4">
+        <h1 class="text-2xl font-bold text-indigo-400 font-mono flex items-center gap-3">
+          <span>${topic.icon}</span> ${escapeHtml(topic.title)}
+        </h1>
+        <p class="text-slate-400 text-sm font-sans mt-2">${escapeHtml(topic.description)}</p>
+      </div>
+      <div class="space-y-4 font-sans text-sm text-slate-300 leading-relaxed">
+    `;
+
+    // Structured render of the extracted content blocks
+    if (topic.content && Array.isArray(topic.content)) {
+      topic.content.forEach(block => {
+        if (!block || !block.type) return;
+
+        switch (block.type) {
+          case 'h':
+            html += `<h3 class="text-sky-400 font-bold font-mono text-base mt-5 mb-2">${escapeHtml(block.text)}</h3>`;
+            break;
+          case 'p':
+            html += `<p class="pl-3 border-l-2 ${block.source ? 'border-indigo-500' : 'border-slate-700'} text-slate-300">`;
+            html += escapeHtml(block.text);
+            if (block.source) {
+              html += ` <span class="kb-source-badge ml-1 text-[9px] text-indigo-400 border-indigo-500/50">${escapeHtml(block.source)}</span>`;
+            }
+            html += `</p>`;
+            break;
+          case 'tip':
+            html += `<div class="bg-emerald-950/20 border border-emerald-900/50 p-3 rounded-lg text-emerald-200 text-xs flex gap-2">
+                       <span class="text-emerald-500 font-bold">💡 TIP:</span>
+                       <span>${escapeHtml(block.text)}</span>
+                     </div>`;
+            break;
+          case 'warn':
+            html += `<div class="bg-amber-950/20 border border-amber-900/50 p-3 rounded-lg text-amber-200 text-xs flex gap-2">
+                       <span class="text-amber-500 font-bold">⚠️ NOTE:</span>
+                       <span>${escapeHtml(block.text)}</span>
+                     </div>`;
+            break;
+          case 'bullets':
+            html += `<ul class="list-disc list-inside space-y-1 ml-2 text-slate-300">`;
+            if (block.items && Array.isArray(block.items)) {
+              block.items.forEach(item => {
+                html += `<li>${escapeHtml(item)}</li>`;
+              });
+            }
+            html += `</ul>`;
+            if (block.source) {
+              html += `<div class="text-right mt-1"><span class="kb-source-badge text-[9px] text-indigo-400 border-indigo-500/50">${escapeHtml(block.source)}</span></div>`;
+            }
+            break;
+          case 'facts':
+            html += `<div class="grid grid-cols-1 gap-2 mt-2">`;
+            if (block.items && Array.isArray(block.items)) {
+              block.items.forEach(fact => {
+                html += `
+                  <div class="bg-cyber-bg border border-cyber-border rounded p-2 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                    <span class="font-bold text-sky-300 font-mono text-xs w-1/3">${escapeHtml(fact.label)}</span>
+                    <span class="text-slate-300 text-sm flex-1">${escapeHtml(fact.value)}</span>
+                    ${fact.source ? `<span class="kb-source-badge text-[9px] text-indigo-400 border-indigo-500/50 flex-shrink-0">${escapeHtml(fact.source)}</span>` : ''}
+                  </div>
+                `;
+              });
+            }
+            html += `</div>`;
+            break;
+          case 'table':
+            html += `<div class="overflow-x-auto mt-3 border border-cyber-border rounded-lg shadow-inner bg-[#03050a]">
+                       <table class="w-full text-left text-xs whitespace-nowrap">
+                         <thead class="bg-slate-900/80 text-sky-400 font-mono border-b border-cyber-border">
+                           <tr>`;
+            if (block.header && Array.isArray(block.header)) {
+              block.header.forEach(th => {
+                html += `<th class="px-3 py-2 uppercase tracking-widest text-[10px] font-bold">${escapeHtml(th)}</th>`;
+              });
+            }
+            html += `      </tr>
+                         </thead>
+                         <tbody class="divide-y divide-cyber-border bg-transparent text-slate-300 font-mono">`;
+
+            if (block.rows && Array.isArray(block.rows)) {
+                block.rows.forEach(row => {
+                    html += `<tr class="hover:bg-indigo-950/20 transition-colors">`;
+                    row.forEach(cell => {
+                        html += `<td class="px-3 py-2 text-xs">${escapeHtml(cell)}</td>`;
+                    });
+                    html += `</tr>`;
+                });
+            } else {
+                html += `<tr><td colspan="10" class="px-3 py-4 text-center italic text-slate-500 text-xs">No data available</td></tr>`;
+            }
+
+            html += `    </tbody>
+                       </table>
+                     </div>`;
+            if (block.caption) html += `<div class="text-[10px] text-slate-500 mt-1.5 italic font-sans">${escapeHtml(block.caption)}</div>`;
+            break;
+        }
+      });
+    }
+
+    html += `</div>`;
+    contentArea.innerHTML = html;
+  }
+
+  // Initial render
+  if (KB_DATA.length > 0) renderTopic(KB_DATA[0].id);
+
+  // Nav click events
+  navArea.addEventListener("click", (e) => {
+    const btn = e.target.closest(".kb-nav-item");
+    if (btn) renderTopic(btn.getAttribute("data-kb-id"));
+  });
+
+  // Modal Toggles
+  toggleBtn.addEventListener("click", () => {
+    modal.classList.remove("hidden");
+    setTimeout(() => {
+      modal.classList.remove("opacity-0");
+      document.getElementById("kbModalContent").classList.remove("scale-95");
+    }, 10);
+  });
+
+  function closeModal() {
+    modal.classList.add("opacity-0");
+    document.getElementById("kbModalContent").classList.add("scale-95");
+    setTimeout(() => modal.classList.add("hidden"), 300);
+  }
+
+  closeBtn.addEventListener("click", closeModal);
+  modal.addEventListener("click", (e) => {
+    if (e.target === modal) closeModal();
+  });
+}
+
+// --- 12. App Initialization & General Handlers ---
+window.copyText = async (text) => {
+  try {
+    await navigator.clipboard.writeText(text);
+    updateStatus(`Copied to clipboard`);
+  } catch (e) {
+    const ta = document.createElement("textarea"); ta.value = text;
+    document.body.appendChild(ta); ta.select(); document.execCommand("copy"); ta.remove();
+    updateStatus(`Copied to clipboard`);
+  }
+};
+
+function escapeHtml(value) {
+  if (value == null) return "";
+  return String(value).replace(/[&<>"']/g, ch => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]));
+}
+
+function updateStatus(text) {
+  const el = document.getElementById("lastIngestStatus");
+  if (el) { el.textContent = text; el.classList.add("text-emerald-400"); setTimeout(() => el.classList.remove("text-emerald-400"), 3000); }
+}
+
+async function shareTarget(node) {
+  const lines = [`[DARKINDEX TARGET REPORT]`];
+  lines.push(`IP: ${node.ip}`);
+  if (node.username) lines.push(`User: ${node.username}`);
+  if (node.clan) lines.push(`Clan: [${node.clan}]`);
+  if (node.level) lines.push(`Level: ${node.level}`);
+  if (node.firewall) lines.push(`Firewall: Lv.${node.firewall}`);
+  if (node.encryptor) lines.push(`Encryptor: Lv.${node.encryptor}`);
+  if (node.wallets && node.wallets.length) lines.push(`Wallets: ${node.wallets.join(", ")}`);
 
 // --- Export and Import ---
 async function exportDataBundle() {
@@ -1389,18 +1283,24 @@ async function exportDataBundle() {
     version: 2,
     exportedAt: new Date().toISOString(),
     targets: await getAllRecords(STORE_NAME),
-    ingests: await getAllRecords(ARCHIVE_STORE_NAME)
+    ingests: await getAllRecords(ARCHIVE_STORE_NAME),
+    stats: {
+      totalTargets: document.getElementById("statTotalTargets").textContent,
+      activeSiphons: document.getElementById("statActiveSiphons").textContent,
+      exportedBy: "DarkIndex Web v2.0"
+    }
   };
 
   const blob = new Blob([JSON.stringify(bundle, null, 2)], { type: "application/json" });
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = url;
-  link.download = `target_console_${new Date().toISOString().slice(0, 10)}.json`;
+  link.download = `darkindex_targets_${new Date().toISOString().slice(0, 10)}.json`;
   document.body.appendChild(link);
   link.click();
   link.remove();
   URL.revokeObjectURL(url);
+  updateStatus("Exported target intelligence bundle to JSON.");
 }
 
 async function importDataBundle(file) {
@@ -1409,74 +1309,73 @@ async function importDataBundle(file) {
     throw new Error("This is not a Target Intelligence Console export.");
   }
 
+  await captureSnapshot();
+
   const importedTargets = Array.isArray(bundle.targets) ? bundle.targets : [];
   const importedIngests = Array.isArray(bundle.ingests) ? bundle.ingests : [];
   const existingTargets = await getAllRecords(STORE_NAME);
-  const targets = new Map(existingTargets.filter((record) => record && record.ip).map((record) => [record.ip, record]));
+  const targetsMap = new Map(existingTargets.map((r) => [r.ip, r]));
 
   for (const imported of importedTargets) {
     if (!imported || !imported.ip) continue;
     delete imported.history;
     delete imported.uploads;
-    const existing = targets.get(imported.ip);
-    targets.set(imported.ip, existing ? mergeTargetRecords(existing, imported).merged : imported);
+
+    // Auto-calculate income for freshly imported legacy records
+    if (!imported.incomeEstimate && (imported.walletThefts || imported.theftLogs)) {
+      imported.incomeEstimate = calculateIncomeFromLogs(imported.theftLogs, imported.walletThefts);
+    }
+
+    const existing = targetsMap.get(imported.ip);
+    targetsMap.set(imported.ip, existing ? mergeTargetRecords(existing, imported).merged : imported);
   }
 
   const tx = db.transaction([STORE_NAME, ARCHIVE_STORE_NAME], "readwrite");
   const targetStore = tx.objectStore(STORE_NAME);
   const archiveStore = tx.objectStore(ARCHIVE_STORE_NAME);
-  for (const target of targets.values()) targetStore.put(target);
+
+  for (const target of targetsMap.values()) targetStore.put(target);
   for (const ingest of importedIngests) {
-    if (ingest && ["logs", "home", "software"].includes(ingest.type) && typeof ingest.raw === "string") {
-      archiveStore.add({ type: ingest.type, raw: ingest.raw, importedAt: ingest.importedAt || new Date().toISOString() });
+    if (ingest && ingest.raw) {
+      archiveStore.add({ type: ingest.type || "import", raw: ingest.raw, importedAt: ingest.importedAt || new Date().toISOString() });
     }
   }
 
-  await new Promise((resolve, reject) => {
-    tx.oncomplete = resolve;
+  return new Promise((resolve, reject) => {
+    tx.oncomplete = () => {
+      reconcileDatabase().then(renderFromDB);
+      updateStatus(`Imported ${importedTargets.length} targets from bundle.`);
+      resolve();
+    };
     tx.onerror = () => reject(tx.error);
   });
-  renderFromDB();
-  return { targetCount: importedTargets.length, ingestCount: importedIngests.length };
 }
 
-function addArchiveButtons() {
-  const headerActions = document.querySelector(".header-actions");
-  if (!headerActions) return;
+// --- 14. Event Listener Registration ---
+document.addEventListener("DOMContentLoaded", () => {
+  initKnowledgeBase();
 
-  const exportButton = document.createElement("button");
-  exportButton.textContent = "Export Data";
-  exportButton.className = "alt-btn";
-  exportButton.addEventListener("click", async () => {
-    try {
-      await exportDataBundle();
-    } catch (error) {
-      alert(`Export failed: ${error.message}`);
-    }
-  });
-
-  const importButton = document.createElement("button");
-  importButton.textContent = "Import Data";
-  importButton.className = "alt-btn";
-  importButton.addEventListener("click", () => {
+  // Export / Import
+  document.getElementById("exportBtn").addEventListener("click", exportDataBundle);
+  document.getElementById("importBtn").addEventListener("click", () => {
     const input = document.createElement("input");
     input.type = "file";
     input.accept = ".json,application/json";
-    input.addEventListener("change", async () => {
-      const file = input.files && input.files[0];
-      if (!file) return;
-      try {
-        const result = await importDataBundle(file);
-        alert(`Imported ${result.targetCount} targets and ${result.ingestCount} archived ingests.`);
-      } catch (error) {
-        alert(`Import failed: ${error.message}`);
+    input.onchange = async (e) => {
+      const file = e.target.files && e.target.files[0];
+      if (file) {
+        try {
+          await importDataBundle(file);
+        } catch (err) {
+          alert(`Import failed: ${err.message}`);
+        }
       }
-    });
+    };
     input.click();
   });
 
-  headerActions.prepend(importButton);
-  headerActions.prepend(exportButton);
-}
+  document.getElementById("processDataBtn").addEventListener("click", async () => {
+    const text = document.getElementById("dataInput").value;
+    if (!text.trim()) return;
 
 addArchiveButtons();

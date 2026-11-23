@@ -1,280 +1,170 @@
-/* ============================================
-   HACKEX2 LOGS - STYLESHEET
-   Dark cyberpunk theme with neon accents
-   ============================================ */
+/* ==========================================================================
+   DARKINDEX // CYBERPUNK ANIMATIONS & UTILITY OVERRIDES
+   ========================================================================== */
 
-* {
-  margin: 0;
-  padding: 0;
-  box-sizing: border-box;
+/* Custom Animations */
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
 }
 
-body {
-  font-family: 'Segoe UI', system-ui, sans-serif;
-  background: #0f172a;
-  color: #e2e8f0;
-  min-height: 100vh;
-  padding-bottom: 40px;
+@keyframes pulseGlow {
+  0%, 100% { box-shadow: 0 0 5px rgba(56, 189, 248, 0.2); }
+  50% { box-shadow: 0 0 15px rgba(56, 189, 248, 0.5); }
 }
 
-/* --- Header --- */
-.header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 16px 24px;
+@keyframes siphonPulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.7; transform: scale(1.15); }
+}
+
+.animate-fade-in {
+  animation: fadeIn 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+.animate-siphon-pulse {
+  animation: siphonPulse 2s ease-in-out infinite;
+}
+
+/* Custom Cyberpunk Scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: #070a12;
+}
+
+::-webkit-scrollbar-thumb {
   background: #1e293b;
-  border-bottom: 2px solid #0ea5e9;
+  border-radius: 3px;
 }
 
-.header h1 {
-  font-size: 20px;
-  color: #38bdf8;
-  text-transform: uppercase;
-  letter-spacing: 2px;
-}
-
-/* --- Main Layout --- */
-.main-container {
-  max-width: 900px;
-  margin: 0 auto;
-  padding: 24px;
-}
-
-/* --- Input Section --- */
-.input-section {
-  background: #1e293b;
-  border-radius: 8px;
-  padding: 20px;
-  margin-bottom: 24px;
-  border: 1px solid #334155;
-}
-
-.input-label {
-  display: block;
-  font-size: 14px;
-  color: #94a3b8;
-  margin-bottom: 8px;
-  text-transform: uppercase;
-  letter-spacing: 1px;
-}
-
-#dataInput {
-  width: 100%;
-  height: 200px;
-  background: #0f172a;
-  color: #e2e8f0;
-  border: 1px solid #334155;
-  border-radius: 6px;
-  padding: 12px;
-  font-family: 'Consolas', monospace;
-  font-size: 13px;
-  resize: vertical;
-}
-
-#dataInput:focus {
-  outline: none;
-  border-color: #0ea5e9;
-}
-
-/* --- Buttons --- */
-.controls {
-  display: flex;
-  gap: 12px;
-  margin-top: 16px;
-  flex-wrap: wrap;
-}
-
-button {
-  padding: 10px 20px;
-  border: none;
-  border-radius: 6px;
-  font-size: 14px;
-  cursor: pointer;
-  transition: all 0.2s ease;
-  text-transform: uppercase;
-  letter-spacing: 1px;
-}
-
-button.primary {
+::-webkit-scrollbar-thumb:hover {
   background: #0ea5e9;
-  color: #fff;
 }
 
-button.primary:hover {
-  background: #38bdf8;
-  transform: translateY(-1px);
-}
-
-button.danger {
-  background: #ef4444;
-  color: #fff;
-}
-
-button.danger:hover {
-  background: #f87171;
-}
-
-/* --- Results Section --- */
-.results-section {
-  margin-top: 24px;
-}
-
-.section-title {
-  font-size: 16px;
-  color: #38bdf8;
-  text-transform: uppercase;
-  letter-spacing: 1px;
-  margin-bottom: 12px;
-  padding-bottom: 8px;
-  border-bottom: 1px solid #334155;
-}
-
-/* --- IP Cards --- */
-.ip-card {
-  background: #1e293b;
-  border-radius: 8px;
-  margin-bottom: 16px;
-  overflow: hidden;
-  border-left: 4px solid #0ea5e9;
-}
-
-.ip-card.partial {
-  border-left-color: #fbbf24;
-}
-
-.card-header {
+/* --- STAT BOX (Header) --- */
+.stat-box {
+  background-color: #050811;
+  border: 1px solid #1e293b;
+  border-radius: 0.5rem;
+  padding: 0.75rem;
   display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 16px 20px;
-  background: rgba(15, 23, 42, 0.5);
+  flex-direction: column;
+  justify-content: center;
+  transition: all 0.2s ease;
 }
 
-.ip-address {
-  font-family: 'Consolas', monospace;
-  font-size: 18px;
-  color: #f8fafc;
-  font-weight: bold;
+.stat-box:hover {
+  border-color: rgba(56, 189, 248, 0.4);
+  background-color: #0b1120;
 }
 
-.partial-badge {
-  background: #fbbf24;
-  color: #0f172a;
-  padding: 4px 10px;
-  border-radius: 4px;
-  font-size: 11px;
-  text-transform: uppercase;
-}
-
-.card-body {
-  padding: 16px 20px;
-}
-
-/* --- Wallets Grid --- */
-.wallets-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-  gap: 12px;
-}
-
-.wallet-item {
-  background: #0f172a;
-  border-radius: 6px;
-  padding: 12px;
-  border: 1px solid #334155;
-}
-
-.wallet-label {
-  font-size: 12px;
-  color: #94a3b8;
-  text-transform: uppercase;
-  margin-bottom: 6px;
-}
-
-.wallet-address {
-  font-family: 'Consolas', monospace;
-  font-size: 13px;
-  color: #e2e8f0;
-  word-break: break-all;
-  line-height: 1.4;
-}
-
-/* --- Software Tags --- */
-.software-section {
-  margin-top: 16px;
-}
-
-.software-label {
-  font-size: 13px;
-  color: #94a3b8;
-  text-transform: uppercase;
-  letter-spacing: 1px;
-  margin-bottom: 8px;
-}
-
-.software-tags {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-.sw-tag {
-  background: #334155;
-  color: #e2e8f0;
-  padding: 6px 12px;
-  border-radius: 4px;
-  font-size: 13px;
-}
-
-/* --- Software Filter Bar --- */
-.filter-bar {
-  display: flex;
-  gap: 8px;
-  margin-bottom: 16px;
-}
-
-#swFilterInput {
-  flex: 1;
-  background: #0f172a;
-  color: #e2e8f0;
-  border: 1px solid #334155;
-  border-radius: 6px;
-  padding: 9px 12px;
-  font-size: 13px;
-}
-
-#swFilterInput:focus {
-  outline: none;
-  border-color: #0ea5e9;
-}
-
-.filter-clear-btn {
-  background: #334155;
-  color: #cbd5e1;
-  padding: 8px 14px;
-  font-size: 12px;
-}
-
-.filter-clear-btn:hover {
-  background: #475569;
-}
-
-/* --- Empty State --- */
-.empty-state {
-  text-align: center;
-  padding: 40px;
+.stat-label {
+  font-size: 0.65rem;
   color: #64748b;
-  font-style: italic;
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
 }
 
-/* --- Responsive --- */
-@media (max-width: 600px) {
-  .main-container {
-    padding: 12px;
-  }
-  
-  .wallets-grid {
-    grid-template-columns: 1fr;
-  }
+.stat-value {
+  font-size: 1.25rem;
+  font-weight: 700;
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  margin-top: 0.25rem;
+}
+
+/* --- CHIP BUTTONS --- */
+.chip-btn {
+  font-size: 0.65rem;
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-weight: 700;
+  padding: 0.25rem 0.5rem;
+  border-radius: 0.25rem;
+  background-color: rgba(30, 41, 59, 0.5);
+  color: #94a3b8;
+  border: 1px solid #334155;
+  transition: all 0.15s ease;
+}
+
+.chip-btn:hover {
+  background-color: rgba(15, 23, 42, 0.8);
+  color: #f8fafc;
+  border-color: #475569;
+}
+
+/* --- NODE CARDS --- */
+.node-card {
+  transition: all 0.2s ease;
+  position: relative;
+  overflow: hidden;
+}
+
+.node-card:hover {
+  border-color: #334155;
+  box-shadow: 0 4px 20px -5px rgba(0, 0, 0, 0.5), 0 0 10px rgba(56, 189, 248, 0.05);
+}
+
+.sw-match {
+  outline: 1px solid #fbbf24;
+  background-color: rgba(251, 191, 36, 0.1) !important;
+  animation: pulseGlow 2s infinite ease-in-out;
+}
+
+/* --- ACTION OVERLAY --- */
+.action-overlay {
+  background: rgba(11, 17, 32, 0.85);
+  backdrop-filter: blur(2px);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.2s ease;
+}
+
+.node-card:hover .action-overlay.active,
+.action-overlay.active {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* Smooth Focus outlines */
+*:focus-visible {
+  outline: 2px solid #38bdf8 !important;
+  outline-offset: 1px;
+}
+
+/* Knowledge Base Navigation Item */
+.kb-nav-item {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.75rem 1rem;
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-size: 0.75rem;
+  color: #94a3b8;
+  border-bottom: 1px solid #1e293b;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.kb-nav-item:hover {
+  background-color: #0f172a;
+  color: #e2e8f0;
+}
+.kb-nav-item.active {
+  background-color: rgba(79, 70, 229, 0.1);
+  color: #a5b4fc;
+  border-left: 3px solid #6366f1;
+}
+
+.kb-source-badge {
+  font-size: 0.55rem;
+  text-transform: uppercase;
+  padding: 0.1rem 0.3rem;
+  border-radius: 0.125rem;
+  border: 1px solid currentColor;
 }
