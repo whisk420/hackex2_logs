@@ -1,339 +1,209 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" class="dark">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>Target Intelligence Console</title>
-  <style>
-    body {
-      font-family: system-ui, -apple-system, sans-serif;
-      max-width: 950px;
-      margin: 16px auto;
-      padding: 0 12px;
-      background: #0b1120;
-      color: #e2e8f0;
-      -webkit-text-size-adjust: 100%;
-    }
-    .header {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 6px;
-      align-items: center;
-      margin-bottom: 12px;
-    }
-    .header-actions {
-      display: flex;
-      gap: 4px;
-      margin-left: auto;
-    }
-    textarea {
-      width: 100%;
-      height: 120px;
-      background: #050811;
-      color: #38bdf8;
-      border: 1px solid #1e293b;
-      border-radius: 6px;
-      padding: 10px;
-      font-family: monospace;
-      font-size: 16px; /* Prevents mobile browser auto-zooming */
-      box-sizing: border-box;
-      resize: vertical;
-    }
-    .controls {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 8px;
-      margin: 10px 0 20px 0;
-    }
-    button {
-      padding: 10px 14px;
-      background: #2563eb;
-      color: white;
-      border: none;
-      border-radius: 6px;
-      cursor: pointer;
-      font-weight: 500;
-      font-size: 14px;
-      touch-action: manipulation;
-    }
-    button:hover { background: #1d4ed8; }
-    button.alt-btn { background: #0284c7; }
-    button.alt-btn:hover { background: #0369a1; }
-    button.danger { background: #dc2626; }
-    button.danger:hover { background: #b91c1c; }
+  <title>DarkIndex // HackEx 2 Target Intelligence</title>
 
-    /* Target Node Card Styling */
-    .node-card {
-      background: #131d31;
-      border: 1px solid #1e293b;
-      border-radius: 8px;
-      padding: 12px;
-      margin-bottom: 12px;
-      box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.2);
-    }
-    .node-header {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      gap: 10px;
-    }
-    .node-meta {
-      display: flex;
-      flex-wrap: wrap;
-      align-items: center;
-      gap: 6px;
-      font-family: monospace;
-      font-size: 14px;
-    }
-    .node-actions {
-      display: flex;
-      gap: 6px;
-      align-items: center;
-      flex-shrink: 0;
-    }
-    .action-btn {
-      padding: 6px 12px;
-      font-size: 12px;
-      font-weight: 600;
-      border-radius: 4px;
-      background: #1e293b;
-      color: #94a3b8;
-      border: 1px solid #334155;
-      min-height: 32px;
-    }
-    .action-btn:hover {
-      background: #334155;
-      color: #f8fafc;
-    }
-    .action-btn.del-btn:hover {
-      background: #7f1d1d;
-      color: #fca5a5;
-      border-color: #991b1b;
-    }
-
-    .ip-title {
-      font-size: 16px;
-      font-weight: 700;
-      color: #38bdf8;
-      cursor: pointer;
-    }
-    .user-tag {
-      color: #f1f5f9;
-      background: #1e293b;
-      border: 1px solid #334155;
-      padding: 2px 6px;
-      border-radius: 4px;
-      font-size: 12px;
-      font-weight: 600;
-    }
-    .hardware-tag {
-      color: #64748b;
-      font-size: 12px;
-    }
-    .stat-badge {
-      padding: 2px 6px;
-      border-radius: 4px;
-      font-size: 11px;
-      font-weight: bold;
-    }
-    .badge-fw {
-      background: #451a03;
-      color: #fb923c;
-      border: 1px solid #7c2d12;
-    }
-    .badge-enc {
-      background: #3b0764;
-      color: #c084fc;
-      border: 1px solid #581c87;
-    }
-    .wallet-container {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 6px;
-      margin: 10px 0 6px 0;
-    }
-    .wallet-tag {
-      background: #0b1329;
-      border: 1px solid #0369a1;
-      color: #38bdf8;
-      padding: 2px 8px;
-      border-radius: 4px;
-      font-family: monospace;
-      font-size: 12px;
-      word-break: break-all;
-    }
-
-    /* Structured Software Grid */
-    .software-section-label {
-      font-size: 11px;
-      text-transform: uppercase;
-      letter-spacing: 0.05em;
-      color: #64748b;
-      margin: 10px 0 6px 0;
-      font-weight: 700;
-    }
-    .software-grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
-      gap: 6px;
-    }
-    .sw-card {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      padding: 6px 10px;
-      border-radius: 4px;
-      font-family: monospace;
-      font-size: 12px;
-    }
-    .sw-loot {
-      background: #062b1b;
-      border: 1px solid #166534;
-      color: #4ade80;
-    }
-    .history-list {
-      margin-top: 10px;
-      padding-top: 8px;
-      border-top: 1px solid #1e293b;
-      font-family: monospace;
-      font-size: 11px;
-      color: #64748b;
-      max-height: 120px;
-      overflow-y: auto;
-    }
-    .history-entry { 
-      padding: 3px 0; 
-      white-space: pre-wrap; 
-      word-break: break-all; 
-    }
-    .section-title {
-      font-size: 13px;
-      font-weight: bold;
-      margin: 18px 0 8px 0;
-      text-transform: uppercase;
-      letter-spacing: 0.05em;
-    }
-    .section-toggle {
-      padding: 0;
-      background: none;
-      color: inherit;
-      font: inherit;
-      text-transform: inherit;
-      letter-spacing: inherit;
-    }
-    .section-toggle:hover { background: none; }
-    .scroll-floater {
-      position: fixed;
-      right: 14px;
-      bottom: 14px;
-      z-index: 10;
-      display: flex;
-      flex-direction: column;
-      gap: 4px;
-    }
-    .scroll-floater button {
-      width: 42px;
-      height: 38px;
-      padding: 0;
-      font-size: 20px;
-      line-height: 1;
-      background: #1e293b;
-      border: 1px solid #475569;
-    }
-    .scroll-floater button:hover { background: #334155; }
-    /* Software Filter Bar */
-    .filter-bar {
-      display: flex;
-      gap: 8px;
-      margin: 14px 0 6px 0;
-    }
-    #softwareFilterInput {
-      flex: 1;
-      min-width: 0;
-      background: #050811;
-      color: #e2e8f0;
-      border: 1px solid #1e293b;
-      border-radius: 6px;
-      padding: 10px;
-      font-family: monospace;
-      font-size: 14px; /* Prevents mobile browser auto-zooming */
-      box-sizing: border-box;
-    }
-    #softwareFilterInput:focus {
-      outline: none;
-      border-color: #2563eb;
-    }
-    .sw-card.sw-match {
-      outline: 2px solid #fbbf24;
-      box-shadow: 0 0 8px rgba(251, 191, 36, 0.35);
-    }
-
-    /* Mobile-Specific Adaptations */
-    @media (max-width: 600px) {
-      body {
-        padding: 0 8px;
-        margin: 10px auto;
-      }
-      .controls button {
-        flex: 1 1 calc(50% - 6px);
-        padding: 12px 6px;
-        font-size: 13px;
-      }
-      .node-header {
-        flex-direction: column;
-        align-items: flex-start;
-      }
-      .node-actions {
-        width: 100%;
-        justify-content: flex-end;
-        border-top: 1px solid #1e293b;
-        padding-top: 8px;
-      }
-      .action-btn {
-        flex: 1;
-        text-align: center;
-        padding: 8px 0;
-      }
-      .software-grid {
-        grid-template-columns: 1fr 1fr;
+  <!-- Tailwind CSS via CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            cyber: {
+              bg: '#0b1120',
+              card: '#050811',
+              border: '#1e293b',
+              ip: '#38bdf8',
+              ident: '#f8fafc',
+              header: '#475569',
+              accent: '#0ea5e9'
+            }
+          },
+          fontFamily: {
+            sans: ['"Inter"', 'system-ui', 'sans-serif'],
+            mono: ['"JetBrains Mono"', '"Fira Code"', 'monospace'],
+            condensed: ['"Roboto Condensed"', 'sans-serif']
+          }
+        }
       }
     }
-  </style>
+  </script>
+  <link rel="stylesheet" href="style.css">
 </head>
-<body>
+<body class="bg-cyber-bg text-slate-200 font-sans min-h-screen selection:bg-sky-500 selection:text-white pb-16">
 
-  <div class="header">
-    <h2 style="margin: 0; font-size: 18px;">Target Intelligence Console</h2>
-    <div class="header-actions">
-      <button id="clearBtn" class="danger" style="padding: 6px 10px; font-size: 12px;">Wipe DB</button>
+  <!-- Main Container -->
+  <div class="max-w-7xl mx-auto px-2 sm:px-6 lg:px-8 pt-4 sm:pt-6 space-y-4">
+
+    <!-- Top Navigation / Header -->
+    <header class="bg-cyber-card border border-cyber-border rounded-xl p-4 shadow-xl flex flex-col md:flex-row items-center justify-between gap-4 transition-all duration-300">
+      <div class="flex items-center gap-3">
+        <div class="w-10 h-10 rounded-lg bg-gradient-to-br from-sky-500 to-indigo-600 flex items-center justify-center text-white font-bold text-xl shadow-lg shadow-sky-500/20 ring-1 ring-sky-400/40">
+          ⚡
+        </div>
+        <div>
+          <h1 class="text-xl sm:text-2xl font-black tracking-wider text-transparent bg-clip-text bg-gradient-to-r from-sky-400 via-indigo-300 to-purple-400 uppercase font-mono">
+            DarkIndex <span class="text-[10px] text-sky-400/80 font-normal tracking-normal border border-sky-500/30 bg-sky-500/10 px-2 py-0.5 rounded-sm ml-1 inline-block align-middle">v2.0 Web</span>
+          </h1>
+          <p class="text-xs text-slate-400 font-mono mt-0.5 uppercase tracking-wide">HackEx 2 Target Intelligence Console</p>
+        </div>
+      </div>
+
+      <!-- Action Buttons -->
+      <div class="flex flex-wrap items-center gap-2 w-full md:w-auto justify-center md:justify-end">
+        <button id="kbToggleBtn" class="flex-1 sm:flex-none px-4 py-2 text-xs font-bold font-mono tracking-wide rounded-md bg-indigo-950/40 hover:bg-indigo-900/60 text-indigo-300 border border-indigo-500/30 transition-all flex items-center justify-center gap-2">
+          <span>🧠</span> KNOWLEDGE BASE
+        </button>
+        <button id="exportBtn" class="flex-1 sm:flex-none px-4 py-2 text-xs font-bold font-mono tracking-wide rounded-md bg-emerald-950/40 hover:bg-emerald-900/60 text-emerald-300 border border-emerald-500/30 transition-all flex items-center justify-center gap-2">
+          <span>💾</span> EXPORT
+        </button>
+        <button id="importBtn" class="flex-1 sm:flex-none px-4 py-2 text-xs font-bold font-mono tracking-wide rounded-md bg-sky-950/40 hover:bg-sky-900/60 text-sky-300 border border-sky-500/30 transition-all flex items-center justify-center gap-2">
+          <span>📂</span> IMPORT
+        </button>
+        <button id="clearBtn" class="px-4 py-2 text-xs font-bold font-mono tracking-wide rounded-md bg-rose-950/40 hover:bg-rose-900/60 text-rose-300 border border-rose-500/30 transition-all flex items-center justify-center gap-2">
+          <span>🗑️</span> WIPE
+        </button>
+      </div>
+    </header>
+
+    <!-- Quick Stats Bar -->
+    <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
+      <div class="stat-box group">
+        <span class="stat-label"><span class="w-1.5 h-1.5 rounded-full bg-sky-400 group-hover:animate-ping"></span> Indexed Targets</span>
+        <span id="statTotalTargets" class="stat-value text-sky-400">0</span>
+      </div>
+      <div class="stat-box group">
+        <span class="stat-label"><span class="w-1.5 h-1.5 rounded-full bg-emerald-400 group-hover:animate-ping"></span> Active Siphons</span>
+        <span id="statActiveSiphons" class="stat-value text-emerald-400">0</span>
+      </div>
+      <div class="stat-box group">
+        <span class="stat-label"><span class="w-1.5 h-1.5 rounded-full bg-purple-400 group-hover:animate-ping"></span> Hot Wallets</span>
+        <span id="statTotalWallets" class="stat-value text-purple-400">0</span>
+      </div>
+      <div class="stat-box group" title="Total estimated passive income per hour from recorded wallets (capped at $100/hr per wallet). Collect 'Stole X Crypto' logs to populate.">
+        <span class="stat-label"><span class="w-1.5 h-1.5 rounded-full bg-amber-400 group-hover:animate-ping"></span> Est. Passive Income</span>
+        <span id="statEstIncome" class="stat-value text-amber-400">$0/hr</span>
+      </div>
+    </div>
+
+    <!-- Data Ingestion Section -->
+    <section class="bg-cyber-card border border-cyber-border rounded-xl p-4 shadow-xl space-y-3">
+      <div class="flex items-center justify-between">
+        <h2 class="text-[11px] font-bold text-cyber-header font-mono uppercase tracking-widest flex items-center gap-2">
+          DATA INGESTION CONSOLE
+        </h2>
+        <span id="lastIngestStatus" class="text-xs font-mono text-slate-500 italic">Awaiting raw input...</span>
+      </div>
+
+      <div class="relative group">
+        <textarea id="dataInput" rows="3" aria-label="Raw HackEx Data Input"
+          placeholder="Paste raw HackEx text here (Home Screen, Installed Software, Attacker/Victim Logs, transfers)..."
+          class="w-full bg-[#03050a] border border-cyber-border rounded-lg p-3.5 text-xs sm:text-sm font-mono text-sky-300 placeholder-slate-600 focus:outline-none focus:border-sky-500 focus:ring-1 focus:ring-sky-500 transition-all resize-y shadow-inner"></textarea>
+      </div>
+
+      <div class="flex flex-wrap items-center justify-between gap-3">
+        <button id="processDataBtn" class="px-6 py-2.5 text-xs font-bold font-mono tracking-wider rounded-md bg-sky-600 hover:bg-sky-500 text-white shadow-[0_0_10px_rgba(2,132,199,0.3)] hover:shadow-[0_0_15px_rgba(2,132,199,0.5)] transition-all flex items-center gap-2 active:scale-95">
+          PROCESS DATA
+        </button>
+        <button id="undoBtn" disabled class="px-4 py-2.5 text-xs font-bold font-mono tracking-wider rounded-md bg-slate-800 text-slate-500 border border-slate-700 disabled:opacity-50 disabled:cursor-not-allowed hover:bg-slate-700 hover:text-slate-300 transition-all flex items-center gap-2">
+          UNDO LAST
+        </button>
+      </div>
+    </section>
+
+    <!-- Search & Filter Controls -->
+    <section class="bg-cyber-card border border-cyber-border rounded-xl p-4 shadow-xl space-y-3">
+      <div class="flex items-center justify-between">
+        <h2 class="text-[11px] font-bold text-cyber-header font-mono uppercase tracking-widest flex items-center gap-2">
+          INTELLIGENCE FILTER
+        </h2>
+      </div>
+
+      <div class="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+        <div class="relative flex-1">
+          <input type="text" id="softwareFilterInput" autocomplete="off" aria-label="Filter target intelligence"
+            placeholder="Search IP, username, wallet, or software (e.g. 'lvl 30', 'spam 17', 'Firewall Lv.10')..."
+            class="w-full bg-[#03050a] border border-cyber-border rounded-md px-3.5 py-2.5 text-sm font-mono text-slate-200 placeholder-slate-600 focus:outline-none focus:border-purple-500 focus:ring-1 focus:ring-purple-500 transition-all shadow-inner">
+        </div>
+        <button id="clearFilterBtn" class="px-5 py-2.5 text-xs font-bold font-mono tracking-wider rounded-md bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition-all">
+          CLEAR
+        </button>
+      </div>
+
+      <!-- Quick Filter Shortcut Chips -->
+      <div class="flex flex-wrap items-center gap-2 pt-1">
+        <button class="chip-btn" data-filter="siphon">🩸 ACTIVE SIPHONS</button>
+        <button class="chip-btn" data-filter="missing">🎯 MISSING DATA</button>
+        <button class="chip-btn" data-filter="spam 15">📧 SPAM 15+</button>
+        <button class="chip-btn" data-filter="wallet">💰 HAS WALLET</button>
+        <button class="chip-btn" data-filter="fw 10">🛡️ FW &lt; 10</button>
+      </div>
+    </section>
+
+    <!-- Targets List Section -->
+    <main class="space-y-4">
+      <div class="flex items-center justify-between border-b border-cyber-border pb-2">
+        <h2 class="text-xs font-bold text-sky-400 font-mono uppercase tracking-widest flex items-center gap-2">
+          COMPLETE TARGETS
+          <span id="fullTargetCount" class="px-2 py-0.5 rounded-sm bg-sky-950 text-sky-300 border border-sky-800 text-[10px]">0</span>
+        </h2>
+      </div>
+
+      <!-- Target Cards Container Grid -->
+      <div id="fullIpContainer" class="grid grid-cols-1 md:grid-cols-2 gap-3">
+        <!-- Dynamic target cards injected here via app.js -->
+      </div>
+
+      <div class="flex items-center justify-between border-b border-cyber-border pb-2 mt-6">
+        <button id="partialToggleBtn" aria-expanded="false"
+          class="text-xs font-bold text-amber-500 hover:text-amber-400 font-mono uppercase tracking-widest flex items-center gap-2 transition focus:outline-none">
+          <span id="partialToggleIcon" class="transition-transform duration-200 text-xs">▶</span> PARTIAL TARGETS
+          <span id="partialTargetCount" class="px-2 py-0.5 rounded-sm bg-amber-950/50 text-amber-500 border border-amber-900/50 text-[10px]">0</span>
+        </button>
+      </div>
+
+      <div id="partialIpContainer" class="hidden grid grid-cols-1 md:grid-cols-2 gap-3">
+        <!-- Dynamic partial target cards injected here -->
+      </div>
+    </main>
+  </div>
+
+  <!-- Knowledge Base Modal (Full Screen Overlay) -->
+  <div id="kbModal" class="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm hidden flex-col items-center justify-center p-4 sm:p-6 opacity-0 transition-opacity duration-300">
+    <div class="bg-cyber-card border border-indigo-500/40 rounded-xl shadow-[0_0_30px_rgba(99,102,241,0.2)] w-full max-w-5xl max-h-full overflow-hidden flex flex-col scale-95 transition-transform duration-300" id="kbModalContent">
+
+      <!-- KB Header -->
+      <div class="flex items-center justify-between px-6 py-4 border-b border-cyber-border bg-[#03050a]">
+        <h2 class="text-lg font-bold text-indigo-400 font-mono uppercase tracking-widest flex items-center gap-3">
+          <span>🧠</span> DARKINDEX KNOWLEDGE BASE
+        </h2>
+        <button id="kbCloseBtn" class="text-slate-400 hover:text-white text-2xl font-bold rounded-lg hover:bg-slate-800 w-8 h-8 flex items-center justify-center transition-colors">&times;</button>
+      </div>
+
+      <!-- KB Body (Two Column Layout) -->
+      <div class="flex flex-col md:flex-row flex-1 overflow-hidden h-full">
+        <!-- Sidebar Navigation -->
+        <div class="w-full md:w-64 bg-cyber-bg border-r border-cyber-border overflow-y-auto flex-shrink-0" id="kbNav">
+          <!-- Nav items injected here -->
+        </div>
+
+        <!-- Content Area -->
+        <div class="flex-1 overflow-y-auto p-6 bg-cyber-card space-y-6" id="kbContentArea">
+          <!-- Content injected here -->
+          <div class="flex h-full items-center justify-center text-slate-500 font-mono text-sm italic">
+            Select a topic from the left sidebar...
+          </div>
+        </div>
+      </div>
     </div>
   </div>
 
-  <textarea id="dataInput" placeholder="Paste data here (Logs, Home Screen, or Software Screen)..."></textarea>
-  
-<div class="controls">
-    <button id="processDataBtn">Process Data</button>
-    <button id="undoBtn" style="background: #475569;" disabled>Undo Last Ingest</button>
-  </div>
-
-  <div class="filter-bar">
-    <input type="text" id="softwareFilterInput" placeholder='Filter software or IP — e.g. Firewall Lv.10 27.61.93.149 (space = AND, | = OR)' autocomplete="off">
-    <button id="clearFilterBtn" class="alt-btn" style="padding: 10px 14px; font-size: 13px;">Clear</button>
-  </div>
-
-  <div class="section-title" style="color: #60a5fa;">Full Targets</div>
-  <div id="fullIpContainer"></div>
-
-  <div class="section-title" style="color: #fbbf24;">
-    <button id="partialToggleBtn" class="section-toggle" aria-expanded="false">v Partial / Masked Targets v</button>
-  </div>
-  <div id="partialIpContainer" hidden></div>
-
-  <div class="scroll-floater" aria-label="Page navigation">
-    <button id="scrollTopBtn" title="Scroll to top" aria-label="Scroll to top">↑</button>
-    <button id="scrollBottomBtn" title="Scroll to bottom" aria-label="Scroll to bottom">↓</button>
-  </div>
-
+  <!-- Main JavaScript App -->
+  <script src="kb_data.js"></script>
   <script src="app.js"></script>
 </body>
 </html>
