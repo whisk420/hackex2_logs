@@ -10,13 +10,7 @@ const ARCHIVE_STORE_NAME = "ingestArchive";
 const SIPHON_STORE_NAME = "siphonLog";
 let db;
 
-// In-Memory Global Log History & Snapshot System
-let previousDatabaseSnapshot = null;
-let lastPastedInputText = "";
-const CHANGE_LOG_MAX = 50;
-
-// Initialize IndexedDB v5
-const dbReq = indexedDB.open(DB_NAME, 5);
+const dbReq = indexedDB.open(DB_NAME, 2);
 
 dbReq.onupgradeneeded = (e) => {
   const d = e.target.result;
@@ -64,12 +58,254 @@ const REGEX_IP = /\b(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|
 const REGEX_MASKED_IP = /\b(?:\d{1,3}|xxx)\.(?:\d{1,3}|xxx)\.(?:\d{1,3}|xxx)\.(?:\d{1,3}|xxx)\b/;
 
 function extractIp(text) {
-  if (!text || text.includes('[UNKNOWN]')) return null;
-  const ipMatch = text.match(REGEX_IP);
-  if (ipMatch) return ipMatch[0];
-  const maskedIpMatch = text.match(REGEX_MASKED_IP);
-  if (maskedIpMatch) return maskedIpMatch[0];
-  return null;
+    // Handle [UNKNOWN] case specifically
+    if (text.includes('[UNKNOWN]')) {
+        return null; // Return null for unknown IPs instead of trying to parse them
+    }
+    
+    // Try standard IP pattern first
+    const ipMatch = text.match(REGEX_IP);
+    if (ipMatch) {
+        return ipMatch[0];
+    }
+    
+    // Try masked IP pattern second
+    const maskedIpMatch = text.match(REGEX_MASKED_IP);
+    if (maskedIpMatch) {
+        return maskedIpMatch[0];
+    }
+    
+    return null;
+}
+
+// --- 4. Parsers ---
+function parseMyLogs(rawLines) {
+  let currentAccessedIp = null;
+  const updates = [];
+
+  for (let i = rawLines.length - 1; i >= 0; i--) {
+    const line = rawLines[i].trim();
+    if (!line) continue;
+
+    const timeMatch = line.match(/^\[([^\]]+)\]/);
+    const time = timeMatch ? timeMatch[1] : null;
+    const isAccessed = line.includes("Accessed device at");
+    const explicitIp = extractIp(line);
+
+    if (isAccessed && explicitIp) {
+      currentAccessedIp = explicitIp;
+      updates.push({ ip: explicitIp, time, raw: line });
+      continue;
+    }
+
+    let stolenWallet = null;
+    if (line.includes("Stole") && line.includes("from hx")) {
+      const wMatch = line.match(/\b(hx[a-zA-Z0-9.]+)\b/);
+      if (wMatch) stolenWallet = wMatch[1];
+    }
+
+    const softMatch = line.match(/(Downloaded|Uploaded|Downloading|Uploading)\s+Lv(\d+)\s+(.+?)(?:\s+(?:from|to)\b|\.\.\.|$)/i);
+    let software = null;
+    let isOwned = false;
+
+    if (softMatch) {
+      const action = softMatch[1].toLowerCase();
+      software = {
+        action: action,
+        level: parseInt(softMatch[2], 10),
+        name: softMatch[3].trim()
+      };
+      isOwned = action.startsWith("download");
+    }
+
+    const targetIp = explicitIp || currentAccessedIp;
+    if (targetIp) {
+      updates.push({
+        ip: targetIp,
+        time,
+        wallet: stolenWallet && targetIp === currentAccessedIp ? stolenWallet : null,
+        software,
+        isOwnedSoftware: isOwned,
+        raw: line
+      });
+    }
+  }
+  return updates;
+}
+
+function parseVictimLogs(rawLines) {
+    const updates = [];
+  let lastAccess = null;
+    
+    // Filter out non-log lines (noise, graffiti)
+    const validLines = rawLines.filter(line => {
+        if (!line.trim()) return false;  // Skip empty lines
+        
+        // Filter out single character lines that are likely graffiti
+        if (line.trim().length === 1) return false;
+        
+        // Only process lines that start with timestamp format [MM-DD HH:MM]
+        const timestampPattern = /^\[[0-9]{1,2}-[0-9]{1,2}\s+[0-9]{1,2}:[0-9]{2}\]/;
+        return timestampPattern.test(line.trim());
+    });
+    
+    for (let i = validLines.length - 1; i >= 0; i--) {
+        const line = validLines[i].trim();
+        if (!line) continue;
+
+      const timeMatch = line.match(/^\[([^\]]+)\]/);
+        const time = timeMatch ? timeMatch[1] : null;
+      const timeParts = time && time.match(/^(\d{1,2})-(\d{1,2})\s+(\d{1,2}):(\d{2})$/);
+      const eventMinute = timeParts
+        ? (((parseInt(timeParts[1], 10) * 31 + parseInt(timeParts[2], 10)) * 24 + parseInt(timeParts[3], 10)) * 60 + parseInt(timeParts[4], 10))
+        : null;
+
+      // Wallets are correlated only to the nearest preceding access in event time.
+      if (line.includes('[UNKNOWN]')) {
+        lastAccess = null;
+        continue;
+      }
+        
+        // Handle device access lines
+        const accessedMatch = line.match(/Device accessed from\s+((?:(?:\d{1,3}|xxx)\.){3}(?:\d{1,3}|xxx))/i);
+        if (accessedMatch) {
+            const ip = extractIp(accessedMatch[1]);
+            if (ip && ip !== '[UNKNOWN]') {
+            lastAccess = { ip, eventMinute };
+                updates.push({ ip: ip, time, raw: line });
+                continue;
+            }
+        }
+
+        const accessAtMatch = line.match(/Accessed device at\s+((?:(?:\d{1,3}|xxx)\.){3}(?:\d{1,3}|xxx))/i);
+        if (accessAtMatch) {
+          const ip = extractIp(accessAtMatch[1]);
+          if (ip) {
+            lastAccess = { ip, eventMinute };
+            updates.push({ ip, time, raw: line });
+            continue;
+          }
+        }
+        
+        // Handle software ownership lines with "from" or "to"
+        let softMatch = null;
+        let targetIp = null;
+        let action = null;
+        let level = null;
+        let softwareName = null;
+        let isOwned = false;
+        
+        // First, try to match lines that have explicit IP references
+        const fromMatch = line.match(/(Downloaded|Uploaded|Downloading|Uploading)\s+Lv(\d+)\s+(.+?)\s+from\s+((?:(?:\d{1,3}|xxx)\.){3}(?:\d{1,3}|xxx))/i);
+        const toMatch = line.match(/(Downloaded|Uploaded|Downloading|Uploading)\s+Lv(\d+)\s+(.+?)\s+to\s+((?:(?:\d{1,3}|xxx)\.){3}(?:\d{1,3}|xxx))/i);
+        
+        if (fromMatch) {
+            action = fromMatch[1].toLowerCase();
+            level = parseInt(fromMatch[2], 10);
+            softwareName = fromMatch[3].trim();
+            targetIp = extractIp(fromMatch[4]);
+            isOwned = action.startsWith("download");
+        } else if (toMatch) {
+            action = toMatch[1].toLowerCase();
+            level = parseInt(toMatch[2], 10);
+            softwareName = toMatch[3].trim();
+            targetIp = extractIp(toMatch[4]);
+            isOwned = action.startsWith("download");
+        } else {
+            // Fallback to original pattern for lines without explicit IP references
+            softMatch = line.match(/(Downloaded|Uploaded|Downloading|Uploading)\s+Lv(\d+)\s+(.+?)(?:\s+(?:from|to)\b|\.|\.\.|\s*$)/i);
+            if (softMatch) {
+                action = softMatch[1].toLowerCase();
+                level = parseInt(softMatch[2], 10);
+                softwareName = softMatch[3].trim();
+                isOwned = action.startsWith("download");
+                
+                // Try to extract IP from the line for upload/download actions
+                const ipFromLine = extractIp(line);
+                if (ipFromLine && !line.includes('[UNKNOWN]')) {
+                    targetIp = ipFromLine;
+                }
+            }
+        }
+        
+        // Handle lines that don't match software patterns but have IPs
+        if (!softMatch && !fromMatch && !toMatch) {
+            const byMatch = line.match(/by\s+((?:(?:\d{1,3}|xxx)\.){3}(?:\d{1,3}|xxx))/i);
+            if (byMatch) {
+                targetIp = extractIp(byMatch[1]);
+            }
+        }
+
+        const walletMatch = line.match(/(Stole\s+(\d[\d,]*)\s+Crypto\s+from|\d[\d,]*\s+Crypto\s+transferred\s+to)\s+(hx[a-zA-Z0-9.]+)/i);
+        if (walletMatch) {
+          const withinCorrelationWindow = lastAccess && eventMinute !== null && lastAccess.eventMinute !== null &&
+            eventMinute >= lastAccess.eventMinute && eventMinute - lastAccess.eventMinute <= 2;
+          if (withinCorrelationWindow) {
+            const update = { ip: lastAccess.ip, time, wallet: walletMatch[3], raw: line };
+            // Theft amount + time feed the passive wallet income estimator.
+            if (walletMatch[2] && eventMinute !== null) {
+              update.theft = { m: eventMinute, a: parseInt(walletMatch[2].replace(/,/g, ""), 10) };
+            }
+            updates.push(update);
+          }
+          continue;
+        }
+        
+        // Handle crypto transfers and other actions
+        const transferMatch = line.match(/(\d+)\s+Crypto\s+transferred\s+to\s+(hx[a-zA-Z0-9.]+)/);
+        if (transferMatch) {
+            updates.push({
+                ip: targetIp,
+                time,
+                wallet: transferMatch[2],
+                raw: line
+            });
+            continue;
+        }
+        
+        // Handle password cracking actions  
+        const crackMatch = line.match(/(Cracking|Cracked)\s+password\s+(?:on\s+)?((?:(?:\d{1,3}|xxx)\.){3}(?:\d{1,3}|xxx))/i);
+        if (crackMatch) {
+            targetIp = extractIp(crackMatch[2]);
+            updates.push({
+                ip: targetIp,
+                time,
+                raw: line
+            });
+            continue;
+        }
+        
+        // Handle firewall actions
+        const firewallMatch = line.match(/(Bypassed|Failed to bypass)\s+firewall\s+(?:on\s+)?((?:(?:\d{1,3}|xxx)\.){3}(?:\d{1,3}|xxx))/i);
+        if (firewallMatch) {
+            targetIp = extractIp(firewallMatch[2]);
+            updates.push({
+                ip: targetIp,
+                time,
+                raw: line
+            });
+            continue;
+        }
+        
+        // Handle software ownership with proper IP extraction
+        if (softMatch || fromMatch || toMatch) {
+            if (targetIp && !line.includes('[UNKNOWN]')) {
+                updates.push({
+                    ip: targetIp,
+                    time,
+                    software: {
+                        action: action,
+                        level: level,
+                        name: softwareName
+                    },
+                    isOwnedSoftware: isOwned,
+                    raw: line
+                });
+            }
+        }
+    }
+    
+    return updates;
 }
 
 function parseHomeScreen(text) {
@@ -106,16 +342,58 @@ function parseHomeScreen(text) {
   return { ip, username, clan, level, hardware: device && network ? `${device} • ${network}` : (device || network || null), firewall, encryptor };
 }
 
-function parseSoftwareScreen(text) {
-  const userMatch = text.match(/^([^\r\n]+?)['’]s installed software\s*$/im);
-  const username = userMatch ? userMatch[1].trim() : null;
-  const softwareItems = {};
-  const validNames = [...SOFTWARE_DEFENSE, ...SOFTWARE_OFFENSE, ...SOFTWARE_VIRUSES];
+// --- 5. Data Merge & Snapshot Management ---
+function initializeRecord(ip) {
+  return {
+    ip: ip,
+    username: null,
+    clan: null,
+    level: null,
+    hardware: null,
+    firewall: null,
+    encryptor: null,
+    wallets: [],
+    downloads: {},
+    thefts: {} // wallet -> [{m: event minute, a: amount}]
+  };
+}
 
-  validNames.forEach((name) => {
-    const pattern = new RegExp("\\b" + name.replace(/\s+/g, "\\s+") + "\\b[\\s\\S]*?LVL\\s*(\\d+)", "i");
-    const match = text.match(pattern);
-    if (match) softwareItems[name] = { level: parseInt(match[1], 10), status: "installed" };
+// Union of two wallet->theft-list maps, deduplicated by (minute, amount).
+function mergeThefts(a, b) {
+  const out = {};
+  for (const src of [a || {}, b || {}]) {
+    for (const [wallet, list] of Object.entries(src)) {
+      const seen = new Set((out[wallet] || []).map((e) => `${e.m}:${e.a}`));
+      out[wallet] = out[wallet] || [];
+      for (const e of list || []) {
+        const key = `${e.m}:${e.a}`;
+        if (!seen.has(key)) { seen.add(key); out[wallet].push(e); }
+      }
+    }
+  }
+  return out;
+}
+
+// Best available income estimate across a record's wallets (highest per-hour wins).
+function recordIncome(record) {
+  let best = null;
+  for (const list of Object.values(record.thefts || {})) {
+    const est = Estimator.estimateIncome(list);
+    if (!est) continue;
+    const val = est.perHour !== undefined ? est.perHour : -1;
+    const bestVal = best ? (best.perHour !== undefined ? best.perHour : -1) : -2;
+    if (val > bestVal) best = est;
+  }
+  return best;
+}
+
+function archiveIngest(type, rawText) {
+  if (!db || !rawText.trim()) return;
+  const tx = db.transaction(ARCHIVE_STORE_NAME, "readwrite");
+  tx.objectStore(ARCHIVE_STORE_NAME).add({
+    type,
+    raw: rawText,
+    importedAt: new Date().toISOString()
   });
 
   return { username, softwareItems };
@@ -210,10 +488,7 @@ function mergeTargetRecords(base, incoming) {
     encryptor: incoming.encryptor || base.encryptor || null,
     wallets: Array.from(new Set([...(base.wallets || []), ...(incoming.wallets || [])])),
     downloads: { ...(base.downloads || {}), ...(incoming.downloads || {}) },
-    theftLogs: [...(base.theftLogs || []), ...(incoming.theftLogs || [])],
-    walletThefts: { ...(base.walletThefts || {}), ...(incoming.walletThefts || {}) },
-    incomeEstimate: 0,
-    siphonActive: Boolean(incoming.downloads?.["Siphon"] || base.downloads?.["Siphon"] || base.siphonActive || incoming.siphonActive)
+    thefts: mergeThefts(base.thefts, incoming.thefts)
   };
 
   // Recalculate income merging both sources
@@ -239,11 +514,7 @@ async function mergeUpdates(updates) {
         record = merged;
       }
       if (!record.wallets.includes(item.wallet)) record.wallets.push(item.wallet);
-      if (item.cryptoAmount) {
-        if (!record.theftLogs) record.theftLogs = [];
-        record.theftLogs.push({ time: item.time, amount: item.cryptoAmount });
-        record.incomeEstimate = calculateIncomeFromLogs(record.theftLogs, record.walletThefts);
-      }
+      if (item.theft) record.thefts = mergeThefts(record.thefts, { [item.wallet]: [item.theft] });
     }
 
     if (item.software && item.isOwnedSoftware) {
@@ -378,7 +649,17 @@ function parseTimestampMinute(ts) {
   return m ? (((parseInt(m[1]) * 31 + parseInt(m[2])) * 24 + parseInt(m[3])) * 60) + parseInt(m[4]) : 0;
 }
 
-// --- 6. Search & Filter Engine ---
+// DarkIndex-style aliases for app names.
+const SOFTWARE_ALIASES = {
+  fw: "Firewall", enc: "Password Encryptor", encryptor: "Password Encryptor", av: "Antivirus",
+  bp: "Bypasser", bypass: "Bypasser", pc: "Password Cracker", crack: "Password Cracker", cracker: "Password Cracker",
+  rk: "Rootkit"
+};
+// Apps you can steal (Firewall and Keygen excluded) — used by the "sw N" shortcut.
+const LOOT_APPS = ["Password Encryptor", "Antivirus", "Proxy", "Trace", "Bypasser", "Password Cracker", "Spam", "Siphon", "Rootkit"];
+
+// Parses a filter query into OR groups (split by "|"); each group is an AND list of conditions.
+// Examples: "Bypasser Lv.9" | "Spam Lv.3 Bypasser" | "lvl 28-32" | "sw 20" | "fw 12" | "user:Bob" | "wallet:hx12"
 function parseSoftwareQuery(query) {
   if (!query || !query.trim()) return null;
   return query.split("|").map((groupText) => {
@@ -386,10 +667,61 @@ function parseSoftwareQuery(query) {
     const conditions = [];
     let i = 0;
     while (i < tokens.length) {
-      const token = tokens[i].toLowerCase();
-      if (token === "siphon" || token === "siphons") { conditions.push({ type: "shortcut", value: "siphon" }); i++; continue; }
-      if (token === "missing" || token === "incomplete") { conditions.push({ type: "shortcut", value: "missing" }); i++; continue; }
-      if (token === "wallet" || token === "wallets") { conditions.push({ type: "shortcut", value: "wallet" }); i++; continue; }
+      const tok = tokens[i];
+      const lower = tok.toLowerCase();
+
+      // Prefixed text filters: user:Name, clan:TAG, wallet:hx...
+      const prefixed = tok.match(/^(user|username|clan|wallet|hw|hardware):(.+)$/i);
+      if (prefixed) {
+        const field = { user: "username", username: "username", clan: "clan", wallet: "wallet", hw: "hardware", hardware: "hardware" }[prefixed[1].toLowerCase()];
+        conditions.push({ type: "field", field, value: prefixed[2].toLowerCase() });
+        i++;
+        continue;
+      }
+      if (/^hx[a-z0-9.]{3,}$/i.test(tok)) {
+        conditions.push({ type: "field", field: "wallet", value: lower });
+        i++;
+        continue;
+      }
+
+      // Player level: "lvl 30", "lvl28-32", "level 30"
+      const lvlRange = (lower + (tokens[i + 1] && /^\d/.test(tokens[i + 1]) && /^(?:lvl|lv|level)\.?$/.test(lower) ? tokens[i + 1] : ""))
+        .match(/^(?:lvl|lv|level)\.?(\d+)(?:-(\d+))?$/);
+      if (lvlRange) {
+        const lo = parseInt(lvlRange[1], 10);
+        conditions.push({ type: "playerLevel", min: lo, max: lvlRange[2] ? parseInt(lvlRange[2], 10) : lo });
+        i += /^(?:lvl|lv|level)\.?$/.test(lower) ? 2 : 1;
+        continue;
+      }
+
+      // Any loot app at exactly level N: "sw 20", "all 20", "software 20"
+      if (/^(?:sw|software|all)$/.test(lower) && tokens[i + 1]) {
+        const lvl = parseLevelToken(tokens[i + 1]) ?? (/^\d+$/.test(tokens[i + 1]) ? parseInt(tokens[i + 1], 10) : null);
+        if (lvl !== null) {
+          conditions.push({ type: "anyLoot", level: lvl });
+          i += 2;
+          continue;
+        }
+      }
+
+      // Alias + level with ±2 spread: "fw 12", "bp9", "spam 17"
+      const aliasMatch = lower.match(/^([a-z]+?)(\d+)?$/);
+      if (aliasMatch && SOFTWARE_ALIASES[aliasMatch[1]]) {
+        let lvl = aliasMatch[2] ? parseInt(aliasMatch[2], 10) : null;
+        i++;
+        if (lvl === null && tokens[i]) {
+          const next = parseLevelToken(tokens[i]) ?? (/^\d+$/.test(tokens[i]) ? parseInt(tokens[i], 10) : null);
+          if (next !== null) { lvl = next; i++; }
+        }
+        conditions.push({ type: "software", name: SOFTWARE_ALIASES[aliasMatch[1]].toLowerCase(), level: lvl, spread: lvl !== null ? 2 : 0 });
+        continue;
+      }
+
+      if (isIpToken(tokens[i])) {
+        conditions.push({ type: "ip", value: tokens[i].toLowerCase() });
+        i++;
+        continue;
+      }
 
       const lvlMatch = token.match(/^(?:lvl|level)\.?\s*(\d+)$/i) || ((token === "lvl" || token === "level") && tokens[i+1] ? [null, tokens[i+1]] : null);
       if (lvlMatch && /^\d+$/.test(lvlMatch[1])) { conditions.push({ type: "shortcut", value: "lvl", minLevel: parseInt(lvlMatch[1]) }); i += token.includes(lvlMatch[1]) ? 1 : 2; continue; }
@@ -406,142 +738,162 @@ function parseSoftwareQuery(query) {
         if (tokens[i+1] && /^\d+$/.test(tokens[i+1])) { lvl = parseInt(tokens[i+1]); i++; }
         conditions.push({ type: "software", name: known.toLowerCase(), level: lvl });
       } else {
-        conditions.push({ type: "text", value: token });
+        // Bare token: free text (username/clan/wallet/hardware) or a partial app name; stray level words / numbers are ignored
+        const lvlOnly = parseLevelToken(tokens[i]) !== null || isLevelWord(tokens[i]);
+        if (!lvlOnly && !/^\d+$/.test(tokens[i])) conditions.push({ type: "text", value: tokens[i].toLowerCase() });
+        i++;
       }
-      i++;
+
+      if (matchedName) conditions.push({ type: "software", name: matchedName.toLowerCase(), level, spread: 0 });
     }
     return conditions;
   }).filter((group) => group.length > 0);
 }
 
-function recordMatchesQuery(record, groups) {
-  const dls = record.downloads || {};
-  return groups.some((conditions) => conditions.every((c) => {
-    if (c.type === "ip") return record.ip.toLowerCase().includes(c.value);
-    if (c.type === "shortcut") {
-      if (c.value === "siphon") return record.siphonActive || dls["Siphon"];
-      if (c.value === "missing") return !record.firewall || !record.encryptor || !record.level;
-      if (c.value === "wallet") return record.wallets && record.wallets.length > 0;
-      if (c.value === "lvl") return (record.level || 0) >= c.minLevel;
-      if (c.value === "fw") return (record.firewall || 99) <= c.maxFw;
-      if (c.value === "spam") return dls["Spam"] && dls["Spam"].level >= c.minSpam;
+function findDownload(record, name) {
+  return Object.entries(record.downloads || {}).find(
+    ([n]) => n.toLowerCase() === name || n.toLowerCase().includes(name)
+  );
+}
+
+function levelInSpread(actual, wanted, spread) {
+  return wanted === null || (actual != null && Math.abs(actual - wanted) <= (spread || 0));
+}
+
+function conditionMatches(record, cond) {
+  switch (cond.type) {
+    case "ip":
+      return record.ip.toLowerCase().includes(cond.value);
+    case "playerLevel":
+      return record.level != null && record.level >= cond.min && record.level <= cond.max;
+    case "anyLoot":
+      return LOOT_APPS.some((app) => record.downloads && record.downloads[app] && record.downloads[app].level === cond.level);
+    case "field": {
+      if (cond.field === "wallet") return (record.wallets || []).some((w) => w.toLowerCase().includes(cond.value));
+      return (record[cond.field] || "").toLowerCase().includes(cond.value);
     }
-    if (c.type === "software") return Object.entries(dls).some(([n, data]) => n.toLowerCase().includes(c.name) && (c.level === null || data.level === c.level));
-    if (c.type === "text") return record.ip.toLowerCase().includes(c.value) || (record.username || "").toLowerCase().includes(c.value) || (record.hardware || "").toLowerCase().includes(c.value);
-    return false;
-  }));
-}
-
-// --- 7. Snapshot & Undo System ---
-async function captureSnapshot() {
-  if (!db) return;
-  previousDatabaseSnapshot = JSON.parse(JSON.stringify(await getAllRecords(STORE_NAME)));
-  lastPastedInputText = document.getElementById("dataInput").value;
-  const undoBtn = document.getElementById("undoBtn");
-  if (undoBtn) { undoBtn.disabled = false; undoBtn.classList.replace("text-slate-500", "text-amber-300"); }
-}
-
-async function restoreSnapshot() {
-  if (!previousDatabaseSnapshot || !db) return;
-  const tx = db.transaction(STORE_NAME, "readwrite");
-  tx.objectStore(STORE_NAME).clear();
-  for (const record of previousDatabaseSnapshot) tx.objectStore(STORE_NAME).put(record);
-  tx.oncomplete = () => {
-    document.getElementById("dataInput").value = lastPastedInputText;
-    previousDatabaseSnapshot = null;
-    const undoBtn = document.getElementById("undoBtn");
-    if (undoBtn) { undoBtn.disabled = true; undoBtn.classList.replace("text-amber-300", "text-slate-500"); }
-    updateStatus("Restored database snapshot prior to last ingestion.");
-    renderFromDB();
-  };
-}
-
-// --- 8. UI Rendering ---
-function renderSoftwareList(node, filterGroups, typeList, title) {
-  const dls = node.downloads || {};
-  let itemsHtml = "";
-  let count = 0;
-
-  typeList.forEach(swName => {
-    if (dls[swName]) {
-      count++;
-      const data = dls[swName];
-      const isMatch = filterGroups && filterGroups.some(cGroup => cGroup.some(c => c.type === 'software' && swName.toLowerCase().includes(c.name) && (c.level === null || data.level === c.level)));
-      itemsHtml += `
-        <div class="flex items-center justify-between w-full mb-1 px-1.5 py-0.5 rounded ${isMatch ? 'bg-amber-500/20 outline outline-1 outline-amber-500 animate-pulseGlow' : ''}">
-          <span class="text-[10px] text-slate-300 font-mono tracking-wide">${getSoftwareIcon(swName)} ${escapeHtml(swName)}</span>
-          <span class="text-[10px] font-bold ${swName === 'Siphon' ? 'text-rose-400' : 'text-sky-400'} font-mono">L${data.level}</span>
-        </div>`;
+    case "text": {
+      const v = cond.value;
+      return ["username", "clan", "hardware"].some((f) => (record[f] || "").toLowerCase().includes(v)) ||
+        (record.wallets || []).some((w) => w.toLowerCase().includes(v)) ||
+        String(record.level || "") === v ||
+        record.ip.toLowerCase().includes(v) ||
+        !!findDownload(record, v);
     }
-  });
-
-  if (count === 0) return "";
-  return `
-    <div class="flex flex-col flex-1 min-w-[30%]">
-      <span class="text-[9px] font-bold text-cyber-header font-condensed tracking-widest mb-1.5 border-b border-cyber-border pb-1">${title}</span>
-      ${itemsHtml}
-    </div>`;
-}
-
-function createCardElement(node, activeGroups) {
-  const card = document.createElement("div");
-  card.className = "node-card bg-cyber-card border border-cyber-border rounded-xl p-3 flex flex-col shadow-lg animate-fade-in relative group";
-
-  const displayIp = node.ip.startsWith("unknown:") ? "UNKNOWN TARGET" : node.ip;
-  const isMasked = node.ip.includes("xxx");
-
-  // Row 1 Header components
-  const userText = node.username ? escapeHtml(node.username) : "";
-  const incomeTag = node.incomeEstimate > 0 ? `<span class="text-[10px] font-bold text-amber-400 font-mono ml-auto">~$${node.incomeEstimate.toFixed(0)}/hr</span>` : "";
-  const wallets = (node.wallets && node.wallets.length > 0) ? `<span class="text-[10px] text-purple-400 font-mono text-right ml-auto flex flex-col gap-0.5">${node.wallets.map(w => `<span class="cursor-pointer hover:text-white" onclick="copyText('${escapeHtml(w)}')">${escapeHtml(w)}</span>`).join('')}</span>` : "";
-
-  // Action Overlay (Shows on Hover)
-  const actionOverlay = `
-    <div class="action-overlay absolute inset-0 rounded-xl flex items-center justify-center gap-2 z-10">
-      <button class="edit-btn px-4 py-1.5 rounded-md bg-cyber-border text-sky-400 font-bold text-xs tracking-wider border border-sky-900 hover:bg-sky-900 transition-colors">EDIT</button>
-      <button class="share-btn px-4 py-1.5 rounded-md bg-cyber-border text-emerald-400 font-bold text-xs tracking-wider border border-emerald-900 hover:bg-emerald-900 transition-colors">SHARE</button>
-      <button class="del-btn px-4 py-1.5 rounded-md bg-rose-950/80 text-rose-400 font-bold text-xs tracking-wider border border-rose-900 hover:bg-rose-900 transition-colors">DELETE</button>
-    </div>
-  `;
-
-  // Row 2 Meta Chips (Hardware & Clan & Level)
-  let rigChips = "";
-  if (node.level) rigChips += `<span class="px-2 py-0.5 bg-indigo-950/50 border border-indigo-900 text-indigo-300 text-[10px] font-bold font-mono rounded">Lv.${node.level}</span>`;
-  if (node.clan) rigChips += `<span class="px-2 py-0.5 bg-slate-800 border border-slate-700 text-slate-300 text-[10px] font-bold font-mono rounded">[${escapeHtml(node.clan)}]</span>`;
-  if (node.hardware) rigChips += `<span class="px-2 py-0.5 text-slate-400 text-[10px] font-mono tracking-tight truncate max-w-[200px]">${escapeHtml(node.hardware)}</span>`;
-
-  if (node.siphonActive) rigChips += `<span class="px-2 py-0.5 bg-rose-950 border border-rose-900 text-rose-400 text-[10px] font-bold font-mono rounded animate-siphon-pulse shadow-[0_0_8px_rgba(244,63,94,0.3)]">SIPHON ACTIVE</span>`;
-
-  // ROW 3: Intelligence (Bypass/Crack odds)
-  let intelChips = "";
-  if (node.firewall || node.encryptor) {
-    intelChips += `<div class="flex items-center justify-center gap-2 w-full pt-1.5 pb-2 border-b border-cyber-border">`;
-    if (node.firewall) intelChips += `<span class="text-[10px] font-mono font-bold text-amber-500 bg-amber-950/30 px-1.5 py-0.5 rounded border border-amber-900/50">FW Lv${node.firewall}</span>`;
-    if (node.encryptor) intelChips += `<span class="text-[10px] font-mono font-bold text-purple-400 bg-purple-950/30 px-1.5 py-0.5 rounded border border-purple-900/50">ENC Lv${node.encryptor}</span>`;
-    intelChips += `</div>`;
+    case "software": {
+      const entry = findDownload(record, cond.name);
+      // Firewall / Encryptor also come from the Home screen fields when no download is recorded.
+      let level = entry ? entry[1].level : null;
+      if (!entry && cond.name === "firewall") level = record.firewall;
+      if (!entry && cond.name === "password encryptor") level = record.encryptor;
+      if (level == null) return false;
+      return levelInSpread(level, cond.level, cond.spread);
+    }
+    default:
+      return true;
   }
+}
 
-  // Row 4 Software Layout
-  const defHtml = renderSoftwareList(node, activeGroups, SOFTWARE_DEFENSE, "DEFENSE");
-  const offHtml = renderSoftwareList(node, activeGroups, SOFTWARE_OFFENSE, "OFFENSE");
-  const virHtml = renderSoftwareList(node, activeGroups, SOFTWARE_VIRUSES, "VIRUSES");
+// A record matches if ANY OR group has ALL of its conditions satisfied.
+function recordMatchesQuery(record, groups) {
+  return groups.some((conditions) => conditions.every((cond) => conditionMatches(record, cond)));
+}
 
-  const noSoftware = (!defHtml && !offHtml && !virHtml) ? `<div class="w-full text-center py-4 text-xs font-mono italic text-slate-600">No software detected</div>` : "";
+// True if this single software entry satisfies at least one condition in any OR group (card highlighting).
+function entryMatchesFilter(name, data, groups) {
+  const n = name.toLowerCase();
+  return groups.some((conditions) =>
+    conditions.some((cond) => {
+      if (cond.type === "anyLoot") return LOOT_APPS.includes(name) && data.level === cond.level;
+      if (cond.type === "text") return n.includes(cond.value);
+      if (cond.type !== "software") return false;
+      return (n === cond.name || n.includes(cond.name)) && levelInSpread(data.level, cond.level, cond.spread);
+    })
+  );
+}
+
+// --- My Stats (used for odds and Good Spam ranking), persisted per browser ---
+const MY_STATS_KEY = "tic.myStats";
+function loadMyStats() {
+  try { return JSON.parse(localStorage.getItem(MY_STATS_KEY)) || {}; } catch (e) { return {}; }
+}
+function saveMyStats(stats) {
+  try { localStorage.setItem(MY_STATS_KEY, JSON.stringify(stats)); } catch (e) { /* private mode */ }
+}
+let myStats = loadMyStats();
+
+function createCardElement(node) {
+  const card = document.createElement("div");
+  card.className = "node-card";
+  const displayIp = node.ip.startsWith("unknown:") ? "UNKNOWN" : node.ip;
+  const h = escapeHtml;
+
+  const userTag = node.username ? `<span class="user-tag">${h(node.username)}</span>` : "";
+  const lvlTag = node.level ? `<span class="stat-badge" style="background:#1e3a8a; color:#93c5fd;">Lv.${node.level}</span>` : "";
+  const fwBadge = node.firewall ? `<span class="stat-badge badge-fw">🛡️ FW: Lv${node.firewall}</span>` : "";
+  const encBadge = node.encryptor ? `<span class="stat-badge badge-enc">🔑 ENC: Lv${node.encryptor}</span>` : "";
+  const hwTag = node.hardware ? `<span class="hardware-tag">(${h(node.hardware)})</span>` : "";
+  const clanBadge = node.clan ? `<span class="stat-badge" style="background:#334155; color:#38bdf8; border: 1px solid #475569;">[${h(node.clan)}]</span>` : "";
+
+  const walletList = node.wallets && node.wallets.length > 0
+    ? `<div class="wallet-container">${node.wallets.map((w) => {
+        const est = Estimator.formatIncome(Estimator.estimateIncome((node.thefts || {})[w]));
+        return `<span class="wallet-tag">Wallet: ${h(w)}${est ? ` <b class="income">${est}</b>` : ""}</span>`;
+      }).join("")}</div>`
+    : "";
+
+  // Intel strip: hack odds, Good Spam plan, missing scrape data.
+  const theirFw = node.firewall ?? (node.downloads?.Firewall?.level ?? null);
+  const theirEnc = node.encryptor ?? (node.downloads?.["Password Encryptor"]?.level ?? null);
+  const intel = [];
+  const bp = Estimator.hackOdds(myStats.bypasser || null, theirFw);
+  const pc = Estimator.hackOdds(myStats.cracker || null, theirEnc);
+  if (bp !== null) intel.push(`<span class="intel-chip" title="Your Bypasser ${myStats.bypasser} vs Firewall ${theirFw}">🚪 Bypass ${bp}%</span>`);
+  if (pc !== null) intel.push(`<span class="intel-chip" title="Your Cracker ${myStats.cracker} vs Encryptor ${theirEnc}">🔨 Crack ${pc}%</span>`);
+  if (node.level) {
+    const plan = Estimator.spamPlan(node.level, myStats.spam || 0);
+    intel.push(`<span class="intel-chip" title="${plan.capReachable ? "Cheapest Spam that hits the ₵100/hr cap" : "Cap not reachable; best-earning level"}">📧 Spam Lv${plan.uploadLevel} → ₵${plan.income}/hr</span>`);
+  }
+  if (Estimator.needsAdvancedTargeting(node)) {
+    intel.push(`<span class="intel-chip intel-missing" title="Advanced targeting: data still to scrape">⚠ Missing: ${Estimator.advancedTargetingMissing(node).map(h).join(", ")}</span>`);
+  }
+  const intelRow = intel.length ? `<div class="intel-row">${intel.join("")}</div>` : "";
+
+  const downEntries = Object.entries(node.downloads || {});
+  const activeGroups = parseSoftwareQuery(document.getElementById("softwareFilterInput").value);
+  const downTags = downEntries.length > 0
+    ? downEntries.map(([name, data]) => `
+        <div class="sw-card sw-loot${activeGroups && entryMatchesFilter(name, data, activeGroups) ? " sw-match" : ""}" data-sw-name="${h(name.toLowerCase())}" data-sw-level="${data.level}">
+          <span>${getSoftwareIcon(name)} ${h(name)}</span>
+          <strong>Lv${data.level}</strong>
+        </div>
+      `).join("")
+    : "<span style='color:#475569; font-size:12px; font-style: italic;'>No target inventory known</span>";
 
   card.innerHTML = `
-    ${actionOverlay}
-    <!-- ROW 1: Header -->
-    <div class="flex items-center justify-between w-full pb-1">
-      <span class="ip-title flex-1 text-sm sm:text-base font-bold font-mono text-sky-400 truncate tracking-tight cursor-pointer hover:underline z-20 relative" onclick="copyText('${node.ip}')">${escapeHtml(displayIp)}</span>
-      <span class="flex-1 text-center text-xs font-bold font-sans text-cyber-ident truncate px-2">${userText}</span>
-      <div class="flex-1 flex flex-col items-end z-20 relative">
-        ${incomeTag || wallets}
+    <div class="node-header">
+    <div class="node-meta">
+        <span class="ip-title">${displayIp}</span>
+        ${clanBadge}
+        ${userTag}
+        ${lvlTag}
+        ${fwBadge}
+        ${encBadge}
+        ${hwTag}
+      </div>
+      <div class="node-actions">
+        <button class="action-btn toggle-btn">Hide</button>
+        <button class="action-btn edit-btn">Edit IP</button>
+        <button class="action-btn share-btn">Share</button>
+        <button class="action-btn del-btn">Delete</button>
       </div>
     </div>
 
-    <!-- ROW 2: Meta -->
-    <div class="flex flex-wrap items-center justify-center gap-1.5 pb-1">
-      ${rigChips}
+    <div class="node-body">
+      ${intelRow}
+      ${walletList}
+      <div class="software-section-label">Target Software</div>
+      <div class="software-grid">${downTags}</div>
     </div>
 
     <!-- ROW 3: Intelligence Divider -->
@@ -618,18 +970,54 @@ async function renderFromDB() {
 
   fullContainer.innerHTML = ""; partialContainer.innerHTML = "";
 
-  const records = await getAllRecords(STORE_NAME);
-  const fullIps = []; const partialIps = [];
-  let totalWallets = 0, activeSiphons = 0, totalEstIncome = 0;
+  const tx = db.transaction(STORE_NAME, "readonly");
+  const store = tx.objectStore(STORE_NAME);
+  const req = store.getAll();
+  req.onsuccess = () => {
+    const records = req.result || [];
+    const fullIps = [];
+    const partialIps = [];
+    let matchCount = 0;
 
-  records.forEach((rec) => {
-    totalWallets += (rec.wallets || []).length;
-    if (rec.siphonActive || (rec.downloads && rec.downloads["Siphon"])) activeSiphons++;
-    if (rec.incomeEstimate) totalEstIncome += rec.incomeEstimate;
+    const advanced = document.getElementById("advancedToggle").checked;
+    records.forEach((rec) => {
+      if (activeGroups && !recordMatchesQuery(rec, activeGroups)) return;
+      if (advanced && !Estimator.needsAdvancedTargeting(rec)) return;
+      matchCount++;
+      if (rec.ip.includes("xxx")) partialIps.push(rec);
+      else fullIps.push(rec);
+    });
 
-    if (activeGroups && !recordMatchesQuery(rec, activeGroups)) return;
-    rec.ip.includes("xxx") ? partialIps.push(rec) : fullIps.push(rec);
-  });
+    const sortMode = document.getElementById("sortSelect").value;
+    const sortList = (list) => {
+      if (sortMode === "spam") {
+        return Estimator.rankForSpam(list, myStats.spam || 0).map((x) => x.record);
+      }
+      if (sortMode === "income") {
+        const val = (r) => { const e = recordIncome(r); return e ? (e.perHour ?? -1) : -2; };
+        return list.slice().sort((a, b) => val(b) - val(a) || compareIps(a.ip, b.ip));
+      }
+      return list.slice().sort((a, b) => compareIps(a.ip, b.ip));
+    };
+    const sortedFull = sortList(fullIps);
+    const sortedPartial = sortList(partialIps);
+    fullIps.length = 0; fullIps.push(...sortedFull);
+    partialIps.length = 0; partialIps.push(...sortedPartial);
+
+    document.getElementById("resultCount").textContent =
+      (activeGroups || advanced) ? `${matchCount} of ${records.length} targets` : `${records.length} targets`;
+
+    if ((activeGroups || advanced) && matchCount === 0) {
+      const noMatchMsg = advanced && !activeGroups
+        ? "<p style='color:#4ade80; font-size:13px;'>Every full target has a wallet, Bypasser, Firewall and Encryptor recorded.</p>"
+        : "<p style='color:#fbbf24; font-size:13px;'>No targets match your filter.</p>";
+      fullContainer.innerHTML = noMatchMsg;
+      partialContainer.innerHTML = noMatchMsg;
+      return;
+    }
+
+    if (fullIps.length === 0) fullContainer.innerHTML = "<p style='color:#475569; font-size:13px;'>No full targets recorded.</p>";
+    else fullIps.forEach((n) => fullContainer.appendChild(createCardElement(n)));
 
   document.getElementById("statTotalTargets").textContent = records.length;
   document.getElementById("statActiveSiphons").textContent = activeSiphons;
@@ -647,8 +1035,36 @@ async function renderFromDB() {
     return 0;
   };
 
-  fullIps.sort(ipSorter);
-  partialIps.sort(ipSorter);
+document.getElementById("advancedToggle").addEventListener("change", () => renderFromDB());
+document.getElementById("sortSelect").addEventListener("change", () => renderFromDB());
+
+// My Stats panel
+(function initMyStats() {
+  const panel = document.getElementById("statsPanel");
+  const btn = document.getElementById("statsToggleBtn");
+  const fields = ["bypasser", "cracker", "spam"];
+  fields.forEach((f) => {
+    const input = document.getElementById(`my-${f}`);
+    input.value = myStats[f] || "";
+    input.addEventListener("input", () => {
+      const n = parseInt(input.value, 10);
+      myStats[f] = Number.isFinite(n) && n > 0 ? n : null;
+      saveMyStats(myStats);
+      renderFromDB();
+    });
+  });
+  btn.addEventListener("click", () => {
+    panel.hidden = !panel.hidden;
+    btn.setAttribute("aria-expanded", String(!panel.hidden));
+  });
+})();
+
+document.getElementById("partialToggleBtn").addEventListener("click", () => {
+  const partialContainer = document.getElementById("partialIpContainer");
+  const isExpanded = partialContainer.hidden;
+  partialContainer.hidden = !isExpanded;
+  document.getElementById("partialToggleBtn").setAttribute("aria-expanded", String(isExpanded));
+});
 
   renderState = { fullIps, partialIps, fullRendered: 0, partialRendered: 0, activeGroups };
 
@@ -860,40 +1276,7 @@ async function shareTarget(node) {
   if (node.encryptor) lines.push(`Encryptor: Lv.${node.encryptor}`);
   if (node.wallets && node.wallets.length) lines.push(`Wallets: ${node.wallets.join(", ")}`);
 
-  const sw = Object.entries(node.downloads || {});
-  if (sw.length) {
-    lines.push("Software:");
-    sw.forEach(([n, d]) => lines.push(` - ${n} Lv.${d.level}`));
-  }
-  await window.copyText(lines.join("\n"));
-}
-
-function deleteTarget(ip, cardEl) {
-  if (!confirm(`Delete target ${ip}?`)) return;
-  db.transaction(STORE_NAME, "readwrite").objectStore(STORE_NAME).delete(ip).onsuccess = () => {
-    if (cardEl) cardEl.remove();
-    renderFromDB();
-  };
-}
-
-async function editTargetIp(oldIp) {
-  const newIp = prompt(`New IP for ${oldIp}:`, oldIp);
-  if (!newIp || !(extractIp(newIp))) return alert("Invalid IP");
-  if (newIp === oldIp) return;
-  await captureSnapshot();
-  const tx = db.transaction(STORE_NAME, "readwrite");
-  const store = tx.objectStore(STORE_NAME);
-  store.delete(oldIp);
-  const existing = (await getAllRecords(STORE_NAME)).find(r => r.ip === newIp);
-  const oldRec = (await getAllRecords(STORE_NAME)).find(r => r.ip === oldIp);
-  if (oldRec) {
-    oldRec.ip = newIp;
-    store.put(existing ? mergeTargetRecords(existing, oldRec).merged : oldRec);
-    tx.oncomplete = () => { reconcileDatabase().then(renderFromDB); };
-  }
-}
-
-// --- 13. Data Bundle Import & Export ---
+// --- Export and Import ---
 async function exportDataBundle() {
   const bundle = {
     format: "target-intelligence-console",
@@ -921,11 +1304,9 @@ async function exportDataBundle() {
 }
 
 async function importDataBundle(file) {
-  const text = await file.text();
-  const bundle = JSON.parse(text);
-
-  if (!bundle || bundle.format !== "target-intelligence-console") {
-    throw new Error("Invalid format: JSON file is not a Target Intelligence Console export.");
+  const bundle = JSON.parse(await file.text());
+  if (!bundle || bundle.format !== "target-intelligence-console" || ![1, 2].includes(bundle.version)) {
+    throw new Error("This is not a Target Intelligence Console export.");
   }
 
   await captureSnapshot();
@@ -997,75 +1378,4 @@ document.addEventListener("DOMContentLoaded", () => {
     const text = document.getElementById("dataInput").value;
     if (!text.trim()) return;
 
-    if (parseHomeScreen(text) || parseSoftwareScreen(text).username) {
-      await captureSnapshot();
-      const h = parseHomeScreen(text);
-      const s = parseSoftwareScreen(text);
-      const targetUser = (h?.username || s?.username || "").toLowerCase();
-
-      const all = await getAllRecords(STORE_NAME);
-      let existing = all.find(r => (h && r.ip === h.ip) || (r.username && r.username.toLowerCase() === targetUser));
-
-      let incoming = initializeRecord(h?.ip || `unknown:${targetUser}`);
-      if (h) {
-        incoming.username = h.username; incoming.clan = h.clan; incoming.level = h.level; incoming.hardware = h.hardware;
-        if (h.firewall) { incoming.firewall = h.firewall; incoming.downloads["Firewall"] = {level: h.firewall}; }
-        if (h.encryptor) { incoming.encryptor = h.encryptor; incoming.downloads["Password Encryptor"] = {level: h.encryptor}; }
-      }
-      if (s) {
-        if(!incoming.username) incoming.username = s.username;
-        Object.assign(incoming.downloads, s.softwareItems);
-      }
-
-      let finalRec = existing ? mergeTargetRecords(existing, incoming).merged : incoming;
-      db.transaction(STORE_NAME, "readwrite").objectStore(STORE_NAME).put(finalRec).onsuccess = () => {
-        archiveIngest(h ? "home" : "software", text);
-        document.getElementById("dataInput").value = "";
-        reconcileDatabase().then(renderFromDB);
-        updateStatus("Ingested profile intelligence.");
-      };
-      return;
-    }
-
-    await captureSnapshot();
-    const updates = parseVictimLogs(text.split("\n"));
-    if (updates.length > 0) {
-      await mergeUpdates(updates);
-      archiveIngest("logs", text);
-      document.getElementById("dataInput").value = "";
-      await reconcileDatabase();
-      updateStatus(`Processed ${updates.length} log events.`);
-      renderFromDB();
-    } else {
-      updateStatus("No recognizable data found.");
-    }
-  });
-
-  document.getElementById("softwareFilterInput").addEventListener("input", renderFromDB);
-  document.getElementById("clearFilterBtn").addEventListener("click", () => {
-    document.getElementById("softwareFilterInput").value = ""; renderFromDB();
-  });
-
-  document.querySelectorAll(".chip-btn").forEach(chip => {
-    chip.addEventListener("click", () => {
-      document.getElementById("softwareFilterInput").value = chip.getAttribute("data-filter");
-      renderFromDB();
-    });
-  });
-
-  document.getElementById("undoBtn").addEventListener("click", restoreSnapshot);
-
-  document.getElementById("clearBtn").addEventListener("click", () => {
-    if (!confirm("Wipe entire database?")) return;
-    const tx = db.transaction([STORE_NAME, ARCHIVE_STORE_NAME, SIPHON_STORE_NAME], "readwrite");
-    tx.objectStore(STORE_NAME).clear(); tx.objectStore(ARCHIVE_STORE_NAME).clear(); tx.objectStore(SIPHON_STORE_NAME).clear();
-    tx.oncomplete = () => renderFromDB();
-  });
-
-  document.getElementById("partialToggleBtn").addEventListener("click", (e) => {
-    const cont = document.getElementById("partialIpContainer");
-    const icon = document.getElementById("partialToggleIcon");
-    const isHid = cont.classList.toggle("hidden");
-    icon.style.transform = isHid ? "rotate(0deg)" : "rotate(90deg)";
-  });
-});
+addArchiveButtons();
