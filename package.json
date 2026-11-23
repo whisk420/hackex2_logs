@@ -1,0 +1,12 @@
+{
+  "name": "hackex2_logs",
+  "private": true,
+  "description": "Static site. style.css is compiled from src/tailwind.css and committed, so no build is needed to host it.",
+  "scripts": {
+    "build:css": "tailwindcss -i ./src/tailwind.css -o ./style.css --minify",
+    "watch:css": "tailwindcss -i ./src/tailwind.css -o ./style.css --watch"
+  },
+  "devDependencies": {
+    "tailwindcss": "3.4.18"
+  }
+}

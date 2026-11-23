@@ -590,75 +590,11 @@ async function reconcileDatabase() {
   }
 }
 
-// --- 2b. Change Log (Confirmation Box) ---
-const CHANGE_LOG_MAX = 60;
-let changeLogEntries = []; // newest first: { time, text, kind }
-
+// --- HTML escaping ---
 function escapeHtml(value) {
   return String(value).replace(/[&<>"']/g, ch => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]));
 }
 
-function logChange(text, kind = "ok") {
-  const stamp = new Date().toTimeString().slice(0, 8);
-  changeLogEntries.unshift({ time: stamp, text, kind });
-  if (changeLogEntries.length > CHANGE_LOG_MAX) changeLogEntries.length = CHANGE_LOG_MAX;
-  renderChangeLog();
-}
-
-function clearChangeLog() {
-  changeLogEntries = [];
-  renderChangeLog();
-}
-
-function renderChangeLog() {
-  const box = document.getElementById("changeLogList");
-  if (!box) return;
-  if (changeLogEntries.length === 0) {
-    box.innerHTML = "<li class='cl-empty'>No changes yet — process a log to see what was updated.</li>";
-    return;
-  }
-  box.innerHTML = changeLogEntries.map(e =>
-    `<li class="cl-item cl-${e.kind}"><span class="cl-time">${e.time}</span><span class="cl-text">${escapeHtml(e.text)}</span></li>`
-  ).join("");
-}
-
-// Human-readable diff between two target records (oldRec may be null for brand-new targets)
-function describeRecordDiff(oldRec, newRec) {
-  if (!newRec) return [];
-  const parts = [];
-  if (!oldRec) {
-    parts.push("NEW TARGET");
-  } else {
-    const fieldFmt = [
-      ["username", v => `user ${v}`],
-      ["level", v => `Lv.${v}`],
-      ["hardware", v => v],
-      ["firewall", v => `Firewall Lv.${v}`],
-      ["encryptor", v => `Encryptor Lv.${v}`]
-    ];
-    for (const [key, fmt] of fieldFmt) {
-      const a = oldRec[key];
-      const b = newRec[key];
-      if (!a && b !== undefined && b !== null && b !== "") parts.push(`+${fmt(b)}`);
-      else if (a && !b) parts.push(`-${fmt(a)}`);
-      else if (String(a) !== String(b)) parts.push(`${key} ${fmt(a)}→${fmt(b)}`);
-    }
-  }
-  const oldWallets = (oldRec && oldRec.wallets) || [];
-  const newWallets = (newRec.wallets || []).filter(w => !oldWallets.includes(w));
-  if (newWallets.length > 0) parts.push(`+${newWallets.length} wallet(s)`);
-  for (const mapKey of ["downloads"]) {
-    const aMap = (oldRec && oldRec[mapKey]) || {};
-    const bMap = newRec[mapKey] || {};
-    for (const name of Object.keys(bMap)) {
-      if (!aMap[name]) parts.push(`+${name} Lv.${bMap[name].level}`);
-      else if (String(aMap[name].level) !== String(bMap[name].level)) parts.push(`${name} Lv.${aMap[name].level}→Lv.${bMap[name].level}`);
-    }
-  }
-  return parts;
-}
-
-// --- 2c. Undo / Snapshot System ---
 let previousDatabaseSnapshot = null;
 let lastPastedInputText = "";
 const undoBtn = document.getElementById("undoBtn");
@@ -673,7 +609,6 @@ async function captureSnapshot() {
       lastPastedInputText = document.getElementById("dataInput").value;
       if (undoBtn) {
         undoBtn.disabled = false;
-        undoBtn.style.background = "#ca8a04";
       }
       resolve();
     };
@@ -697,9 +632,10 @@ async function restoreSnapshot() {
     previousDatabaseSnapshot = null;
     if (undoBtn) {
       undoBtn.disabled = true;
-      undoBtn.style.background = "#475569";
     }
     renderFromDB();
+    setIngestStatus("Last ingest undone", "warn");
+    showToast("Undid last ingest", "warn");
   };
 }
 
@@ -711,7 +647,8 @@ function deleteTarget(ip, cardElement) {
   const tx = db.transaction(STORE_NAME, "readwrite");
   tx.objectStore(STORE_NAME).delete(ip);
   tx.oncomplete = () => {
-    if (cardElement) cardElement.remove();
+    showToast(`Deleted ${ip}`, "warn");
+    renderFromDB();
   };
 }
 
@@ -732,7 +669,7 @@ async function shareTarget(node) {
   const payload = lines.join("\n");
   try {
     await navigator.clipboard.writeText(payload);
-    alert(`Copied report for ${node.ip} to clipboard!`);
+    showToast(`Copied report for ${node.ip}`, "ok");
   } catch (err) {
     const ta = document.createElement("textarea");
     ta.value = payload;
@@ -740,7 +677,7 @@ async function shareTarget(node) {
     ta.select();
     document.execCommand("copy");
     document.body.removeChild(ta);
-    alert(`Copied report for ${node.ip} to clipboard!`);
+    showToast(`Copied report for ${node.ip}`, "ok");
   }
 }
 
@@ -750,7 +687,7 @@ async function editTargetIp(oldIp) {
 
   const validIp = extractIp(newIpInput.trim());
   if (!validIp) {
-    alert("Invalid IP format entered.");
+    showToast("Invalid IP format entered.", "error");
     return;
   }
   if (validIp === oldIp) return;
@@ -1045,24 +982,19 @@ function saveMyStats(stats) {
 let myStats = loadMyStats();
 
 function createCardElement(node) {
-  const card = document.createElement("div");
+  const card = document.createElement("article");
   card.className = "node-card";
-  const displayIp = node.ip.startsWith("unknown:") ? "UNKNOWN" : node.ip;
+  const isUnknown = node.ip.startsWith("unknown:");
+  const displayIp = isUnknown ? "UNKNOWN IP" : node.ip;
   const h = escapeHtml;
 
-  const userTag = node.username ? `<span class="user-tag">${h(node.username)}</span>` : "";
-  const lvlTag = node.level ? `<span class="stat-badge" style="background:#1e3a8a; color:#93c5fd;">Lv.${node.level}</span>` : "";
-  const fwBadge = node.firewall ? `<span class="stat-badge badge-fw">🛡️ FW: Lv${node.firewall}</span>` : "";
-  const encBadge = node.encryptor ? `<span class="stat-badge badge-enc">🔑 ENC: Lv${node.encryptor}</span>` : "";
-  const hwTag = node.hardware ? `<span class="hardware-tag">(${h(node.hardware)})</span>` : "";
-  const clanBadge = node.clan ? `<span class="stat-badge" style="background:#334155; color:#38bdf8; border: 1px solid #475569;">[${h(node.clan)}]</span>` : "";
-
-  const walletList = node.wallets && node.wallets.length > 0
-    ? `<div class="wallet-container">${node.wallets.map((w) => {
-        const est = Estimator.formatIncome(Estimator.estimateIncome((node.thefts || {})[w]));
-        return `<span class="wallet-tag">Wallet: ${h(w)}${est ? ` <b class="income">${est}</b>` : ""}</span>`;
-      }).join("")}</div>`
-    : "";
+  // Identity tags
+  const tags = [];
+  if (node.level) tags.push(`<span class="tag-level">Lv.${node.level}</span>`);
+  if (node.clan) tags.push(`<span class="tag-clan">[${h(node.clan)}]</span>`);
+  if (node.firewall) tags.push(`<span class="tag-fw">🛡️ FW ${node.firewall}</span>`);
+  if (node.encryptor) tags.push(`<span class="tag-enc">🔑 ENC ${node.encryptor}</span>`);
+  const hwLine = node.hardware ? `<div class="truncate font-mono text-[11px] text-slate-500" title="${h(node.hardware)}">${h(node.hardware)}</div>` : "";
 
   // Intel strip: hack odds, Good Spam plan, missing scrape data.
   const theirFw = node.firewall ?? (node.downloads?.Firewall?.level ?? null);
@@ -1070,8 +1002,9 @@ function createCardElement(node) {
   const intel = [];
   const bp = Estimator.hackOdds(myStats.bypasser || null, theirFw);
   const pc = Estimator.hackOdds(myStats.cracker || null, theirEnc);
-  if (bp !== null) intel.push(`<span class="intel-chip" title="Your Bypasser ${myStats.bypasser} vs Firewall ${theirFw}">🚪 Bypass ${bp}%</span>`);
-  if (pc !== null) intel.push(`<span class="intel-chip" title="Your Cracker ${myStats.cracker} vs Encryptor ${theirEnc}">🔨 Crack ${pc}%</span>`);
+  const oddsColor = (p) => (p >= 74 ? "text-emerald-300" : p >= 50 ? "text-amber-300" : "text-rose-300");
+  if (bp !== null) intel.push(`<span class="intel-chip ${oddsColor(bp)}" title="Your Bypasser ${myStats.bypasser} vs Firewall ${theirFw}">🚪 Bypass ${bp}%</span>`);
+  if (pc !== null) intel.push(`<span class="intel-chip ${oddsColor(pc)}" title="Your Cracker ${myStats.cracker} vs Encryptor ${theirEnc}">🔨 Crack ${pc}%</span>`);
   if (node.level) {
     const plan = Estimator.spamPlan(node.level, myStats.spam || 0);
     intel.push(`<span class="intel-chip" title="${plan.capReachable ? "Cheapest Spam that hits the ₵100/hr cap" : "Cap not reachable; best-earning level"}">📧 Spam Lv${plan.uploadLevel} → ₵${plan.income}/hr</span>`);
@@ -1079,68 +1012,61 @@ function createCardElement(node) {
   if (Estimator.needsAdvancedTargeting(node)) {
     intel.push(`<span class="intel-chip intel-missing" title="Advanced targeting: data still to scrape">⚠ Missing: ${Estimator.advancedTargetingMissing(node).map(h).join(", ")}</span>`);
   }
-  const intelRow = intel.length ? `<div class="intel-row">${intel.join("")}</div>` : "";
+  const intelRow = intel.length ? `<div class="flex flex-wrap gap-1.5">${intel.join("")}</div>` : "";
+
+  const walletList = node.wallets && node.wallets.length > 0
+    ? `<div class="flex flex-col gap-1">${node.wallets.map((w) => {
+        const est = Estimator.formatIncome(Estimator.estimateIncome((node.thefts || {})[w]));
+        return `<button type="button" class="wallet-tag text-left" data-copy="${h(w)}" title="Copy wallet">👛 ${h(w)}${est ? ` <span class="income">${est}</span>` : ""}</button>`;
+      }).join("")}</div>`
+    : "";
 
   const downEntries = Object.entries(node.downloads || {});
   const activeGroups = parseSoftwareQuery(document.getElementById("softwareFilterInput").value);
   const downTags = downEntries.length > 0
-    ? downEntries.map(([name, data]) => `
-        <div class="sw-card sw-loot${activeGroups && entryMatchesFilter(name, data, activeGroups) ? " sw-match" : ""}" data-sw-name="${h(name.toLowerCase())}" data-sw-level="${data.level}">
-          <span>${getSoftwareIcon(name)} ${h(name)}</span>
-          <strong>Lv${data.level}</strong>
-        </div>
-      `).join("")
-    : "<span style='color:#475569; font-size:12px; font-style: italic;'>No target inventory known</span>";
+    ? `<div class="grid grid-cols-2 gap-1.5">${downEntries.map(([name, data]) => `
+        <div class="sw-card${activeGroups && entryMatchesFilter(name, data, activeGroups) ? " sw-match" : ""}" data-sw-name="${h(name.toLowerCase())}" data-sw-level="${data.level}">
+          <span class="truncate">${getSoftwareIcon(name)} ${h(name)}</span>
+          <strong class="pl-1">Lv${data.level}</strong>
+        </div>`).join("")}</div>`
+    : `<div class="font-mono text-xs italic text-slate-600">No target inventory known</div>`;
 
   card.innerHTML = `
-    <div class="node-header">
-    <div class="node-meta">
-        <span class="ip-title">${displayIp}</span>
-        ${clanBadge}
-        ${userTag}
-        ${lvlTag}
-        ${fwBadge}
-        ${encBadge}
-        ${hwTag}
+    <div class="flex items-start justify-between gap-2">
+      <div class="min-w-0">
+        <button type="button" class="ip-title block truncate font-mono text-base font-bold tracking-tight text-sky-400 hover:underline${isUnknown ? " cursor-default text-slate-500 hover:no-underline" : ""}"${isUnknown ? " disabled" : ' title="Copy IP address"'}>${h(displayIp)}</button>
+        ${node.username ? `<div class="truncate text-sm font-semibold text-cyber-ident">${h(node.username)}</div>` : ""}
       </div>
-      <div class="node-actions">
-        <button class="action-btn toggle-btn">Hide</button>
-        <button class="action-btn edit-btn">Edit IP</button>
-        <button class="action-btn share-btn">Share</button>
-        <button class="action-btn del-btn">Delete</button>
-      </div>
+      <button type="button" class="toggle-btn btn-card shrink-0" aria-expanded="true">Hide</button>
     </div>
-
-    <div class="node-body">
+    ${tags.length ? `<div class="flex flex-wrap gap-1.5">${tags.join("")}</div>` : ""}
+    ${hwLine}
+    <div class="node-body flex flex-col gap-2.5">
       ${intelRow}
       ${walletList}
-      <div class="software-section-label">Target Software</div>
-      <div class="software-grid">${downTags}</div>
+      <div class="card-label border-b border-cyber-border pb-1">Target software</div>
+      ${downTags}
+      <div class="flex gap-1.5 border-t border-cyber-border pt-2.5">
+        <button type="button" class="edit-btn btn-card flex-1">Edit IP</button>
+        <button type="button" class="share-btn btn-card flex-1">Share</button>
+        <button type="button" class="del-btn btn-card-danger flex-1">Delete</button>
+      </div>
     </div>
   `;
 
   const toggleBtn = card.querySelector(".toggle-btn");
   const bodySection = card.querySelector(".node-body");
-  const ipTitle = card.querySelector(".ip-title");
-  if (!node.ip.startsWith("unknown:")) {
-    ipTitle.title = "Copy IP address";
-    ipTitle.addEventListener("click", async () => {
-      try {
-        await navigator.clipboard.writeText(node.ip);
-      } catch (err) {
-        const ta = document.createElement("textarea");
-        ta.value = node.ip;
-        document.body.appendChild(ta);
-        ta.select();
-        document.execCommand("copy");
-        document.body.removeChild(ta);
-      }
-    });
+  if (!isUnknown) {
+    card.querySelector(".ip-title").addEventListener("click", () => copyText(node.ip, `Copied ${node.ip}`));
   }
+  card.querySelectorAll("[data-copy]").forEach((el) =>
+    el.addEventListener("click", () => copyText(el.dataset.copy, "Copied wallet"))
+  );
   toggleBtn.addEventListener("click", () => {
-    const isHidden = bodySection.style.display === "none";
-    bodySection.style.display = isHidden ? "block" : "none";
-    toggleBtn.textContent = isHidden ? "Hide" : "Expand";
+    const show = bodySection.hidden;
+    bodySection.hidden = !show;
+    toggleBtn.textContent = show ? "Hide" : "Expand";
+    toggleBtn.setAttribute("aria-expanded", String(show));
   });
 
   card.querySelector(".edit-btn").addEventListener("click", () => editTargetIp(node.ip));
@@ -1148,6 +1074,56 @@ function createCardElement(node) {
   card.querySelector(".del-btn").addEventListener("click", () => deleteTarget(node.ip, card));
 
   return card;
+}
+
+// --- Toast + clipboard + status helpers ---
+let toastTimer = null;
+function showToast(text, tone = "info") {
+  const el = document.getElementById("toast");
+  if (!el) return;
+  const tones = { info: "border-sky-500/40 text-sky-200", ok: "border-emerald-500/40 text-emerald-200", warn: "border-amber-500/50 text-amber-200", error: "border-rose-500/50 text-rose-200" };
+  el.className = el.className.replace(/border-\S+\/\d+ text-\S+-200/g, "").trim() + " " + (tones[tone] || tones.info);
+  el.textContent = text;
+  el.hidden = false;
+  el.style.animation = "none"; void el.offsetWidth; el.style.animation = "";
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { el.hidden = true; }, 2600);
+}
+
+async function copyText(text, message) {
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch (err) {
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    document.body.appendChild(ta);
+    ta.select();
+    document.execCommand("copy");
+    document.body.removeChild(ta);
+  }
+  showToast(message || "Copied", "ok");
+}
+
+function setIngestStatus(text, tone = "ok") {
+  const el = document.getElementById("lastIngestStatus");
+  if (!el) return;
+  el.textContent = `${new Date().toTimeString().slice(0, 5)} · ${text}`;
+  el.classList.remove("italic", "text-slate-500", "text-emerald-400", "text-amber-400", "text-rose-400");
+  el.classList.add({ ok: "text-emerald-400", warn: "text-amber-400", error: "text-rose-400" }[tone] || "text-slate-500");
+}
+
+function updateStatsBar(records) {
+  let wallets = 0, income = 0, missing = 0;
+  for (const r of records) {
+    wallets += (r.wallets || []).length;
+    const est = recordIncome(r);
+    if (est && est.perHour !== undefined) income += est.perHour;
+    if (Estimator.needsAdvancedTargeting(r)) missing++;
+  }
+  document.getElementById("statTotalTargets").textContent = records.length;
+  document.getElementById("statTotalWallets").textContent = wallets;
+  document.getElementById("statEstIncome").textContent = `₵${Estimator.formatAmount(income)}/hr`;
+  document.getElementById("statMissing").textContent = missing;
 }
 
 function renderFromDB() {
@@ -1170,6 +1146,7 @@ function renderFromDB() {
     const partialIps = [];
     let matchCount = 0;
 
+    updateStatsBar(records);
     const advanced = document.getElementById("advancedToggle").checked;
     records.forEach((rec) => {
       if (activeGroups && !recordMatchesQuery(rec, activeGroups)) return;
@@ -1198,19 +1175,25 @@ function renderFromDB() {
     document.getElementById("resultCount").textContent =
       (activeGroups || advanced) ? `${matchCount} of ${records.length} targets` : `${records.length} targets`;
 
+    document.getElementById("fullTargetCount").textContent = fullIps.length;
+    document.getElementById("partialTargetCount").textContent = partialIps.length;
+
     if ((activeGroups || advanced) && matchCount === 0) {
       const noMatchMsg = advanced && !activeGroups
-        ? "<p style='color:#4ade80; font-size:13px;'>Every full target has a wallet, Bypasser, Firewall and Encryptor recorded.</p>"
-        : "<p style='color:#fbbf24; font-size:13px;'>No targets match your filter.</p>";
+        ? `<div class="empty-state border-emerald-900/50 bg-emerald-950/20 text-emerald-400">Every full target has a wallet, Bypasser, Firewall and Encryptor recorded.</div>`
+        : `<div class="empty-state border-amber-900/40 bg-amber-950/20 text-amber-400">No targets match your filter.</div>`;
       fullContainer.innerHTML = noMatchMsg;
       partialContainer.innerHTML = noMatchMsg;
       return;
     }
 
-    if (fullIps.length === 0) fullContainer.innerHTML = "<p style='color:#475569; font-size:13px;'>No full targets recorded.</p>";
-    else fullIps.forEach((n) => fullContainer.appendChild(createCardElement(n)));
+    if (fullIps.length === 0) {
+      fullContainer.innerHTML = records.length === 0
+        ? `<div class="empty-state">No targets indexed yet.<br><span class="text-xs text-slate-600">Paste victim logs, a Home screen or a Software screen above and press Process data.</span></div>`
+        : `<div class="empty-state">No complete targets match.</div>`;
+    } else fullIps.forEach((n) => fullContainer.appendChild(createCardElement(n)));
 
-    if (partialIps.length === 0) partialContainer.innerHTML = "<p style='color:#475569; font-size:13px;'>No partial targets recorded.</p>";
+    if (partialIps.length === 0) partialContainer.innerHTML = `<div class="empty-state">No partial targets recorded.</div>`;
     else partialIps.forEach((n) => partialContainer.appendChild(createCardElement(n)));
   };
 }
@@ -1222,8 +1205,28 @@ document.getElementById("clearFilterBtn").addEventListener("click", () => {
   renderFromDB();
 });
 
-document.getElementById("advancedToggle").addEventListener("change", () => renderFromDB());
-document.getElementById("sortSelect").addEventListener("change", () => renderFromDB());
+// Quick chips mirror the advanced-targeting checkbox and the sort menu; filter chips fill the search box.
+function syncChips() {
+  const adv = document.getElementById("advancedToggle").checked;
+  const sort = document.getElementById("sortSelect").value;
+  document.querySelectorAll(".chip-btn[data-toggle=advanced]").forEach((c) => c.setAttribute("aria-pressed", String(adv)));
+  document.querySelectorAll(".chip-btn[data-sort]").forEach((c) => c.setAttribute("aria-pressed", String(c.dataset.sort === sort)));
+}
+document.getElementById("advancedToggle").addEventListener("change", () => { syncChips(); renderFromDB(); });
+document.getElementById("sortSelect").addEventListener("change", () => { syncChips(); renderFromDB(); });
+document.querySelectorAll(".chip-btn").forEach((chip) => chip.addEventListener("click", () => {
+  if (chip.dataset.toggle === "advanced") {
+    const box = document.getElementById("advancedToggle");
+    box.checked = !box.checked;
+  } else if (chip.dataset.sort) {
+    const sel = document.getElementById("sortSelect");
+    sel.value = sel.value === chip.dataset.sort ? "ip" : chip.dataset.sort;
+  } else if (chip.dataset.filter) {
+    document.getElementById("softwareFilterInput").value = chip.dataset.filter;
+  }
+  syncChips();
+  renderFromDB();
+}));
 
 // My Stats panel
 (function initMyStats() {
@@ -1251,6 +1254,7 @@ document.getElementById("partialToggleBtn").addEventListener("click", () => {
   const isExpanded = partialContainer.hidden;
   partialContainer.hidden = !isExpanded;
   document.getElementById("partialToggleBtn").setAttribute("aria-expanded", String(isExpanded));
+  document.getElementById("partialToggleIcon").style.transform = isExpanded ? "rotate(90deg)" : "";
 });
 
 document.getElementById("scrollTopBtn").addEventListener("click", () => {
@@ -1280,6 +1284,15 @@ document.getElementById("processDataBtn").addEventListener("click", async () => 
   document.getElementById("dataInput").value = "";
   await reconcileDatabase();
   renderFromDB();
+  const ips = new Set(updates.filter((u) => u && u.ip).map((u) => u.ip)).size;
+  const thefts = updates.filter((u) => u && u.theft).length;
+  if (updates.length === 0) {
+    setIngestStatus("No recognisable log lines found", "warn");
+    showToast("Nothing recognised — expected lines like [11-20 10:01] …", "warn");
+  } else {
+    setIngestStatus(`Logs: ${updates.length} events · ${ips} IPs${thefts ? ` · ${thefts} thefts` : ""}`);
+    showToast(`Processed ${updates.length} log events`, "ok");
+  }
 });
 
 async function processVictimData() {
@@ -1290,11 +1303,13 @@ async function processVictimData() {
   if (!parsed) {
     const software = parseSoftwareScreen(text);
     if (!software.username) {
-      alert("Could not identify Victim Home or Victim Software data.");
+      setIngestStatus("Could not identify Victim Home or Software data", "error");
+      showToast("Could not identify Victim Home or Victim Software data.", "error");
       return;
     }
     if (Object.keys(software.softwareItems).length === 0) {
-      alert("Could not detect any software levels in this Victim Software dump.");
+      setIngestStatus("No software levels found in that Software screen", "error");
+      showToast("Could not detect any software levels in this Victim Software dump.", "error");
       return;
     }
 
@@ -1322,6 +1337,9 @@ async function processVictimData() {
       archiveIngest("software", text);
       document.getElementById("dataInput").value = "";
       renderFromDB();
+      const n = Object.keys(software.softwareItems).length;
+      setIngestStatus(`Software: ${n} apps for ${record.username}`);
+      showToast(`Saved ${n} apps for ${record.username}`, "ok");
     };
     return;
   }
@@ -1338,6 +1356,7 @@ async function processVictimData() {
 
   const incoming = initializeRecord(parsed.ip);
   incoming.username = parsed.username;
+  incoming.clan = parsed.clan;
   incoming.level = parsed.level;
   incoming.hardware = parsed.hardware;
   if (parsed.firewall) {
@@ -1371,6 +1390,8 @@ async function processVictimData() {
     document.getElementById("dataInput").value = "";
     await reconcileDatabase();
     renderFromDB();
+    setIngestStatus(`Home: ${finalRecord.ip}${finalRecord.username ? ` (${finalRecord.username})` : ""}`);
+    showToast(`${existing ? "Updated" : "Added"} ${finalRecord.ip}`, "ok");
   };
 }
 
@@ -1440,43 +1461,30 @@ async function importDataBundle(file) {
   return { targetCount: importedTargets.length, ingestCount: importedIngests.length };
 }
 
-function addArchiveButtons() {
-  const headerActions = document.querySelector(".header-actions");
-  if (!headerActions) return;
+// Export / Import buttons live in the header markup.
+document.getElementById("exportBtn").addEventListener("click", async () => {
+  try {
+    await exportDataBundle();
+    showToast("Exported database", "ok");
+  } catch (error) {
+    showToast(`Export failed: ${error.message}`, "error");
+  }
+});
 
-  const exportButton = document.createElement("button");
-  exportButton.textContent = "Export Data";
-  exportButton.className = "alt-btn";
-  exportButton.addEventListener("click", async () => {
+document.getElementById("importBtn").addEventListener("click", () => {
+  const input = document.createElement("input");
+  input.type = "file";
+  input.accept = ".json,application/json";
+  input.addEventListener("change", async () => {
+    const file = input.files && input.files[0];
+    if (!file) return;
     try {
-      await exportDataBundle();
+      const result = await importDataBundle(file);
+      showToast(`Imported ${result.targetCount} targets, ${result.ingestCount} archived ingests`, "ok");
+      setIngestStatus(`Import: ${result.targetCount} targets`);
     } catch (error) {
-      alert(`Export failed: ${error.message}`);
+      showToast(`Import failed: ${error.message}`, "error");
     }
   });
-
-  const importButton = document.createElement("button");
-  importButton.textContent = "Import Data";
-  importButton.className = "alt-btn";
-  importButton.addEventListener("click", () => {
-    const input = document.createElement("input");
-    input.type = "file";
-    input.accept = ".json,application/json";
-    input.addEventListener("change", async () => {
-      const file = input.files && input.files[0];
-      if (!file) return;
-      try {
-        const result = await importDataBundle(file);
-        alert(`Imported ${result.targetCount} targets and ${result.ingestCount} archived ingests.`);
-      } catch (error) {
-        alert(`Import failed: ${error.message}`);
-      }
-    });
-    input.click();
-  });
-
-  headerActions.prepend(importButton);
-  headerActions.prepend(exportButton);
-}
-
-addArchiveButtons();
+  input.click();
+});
