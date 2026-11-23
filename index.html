@@ -2,446 +2,159 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>Target Intelligence Console</title>
-  <style>
-    body {
-      font-family: system-ui, -apple-system, sans-serif;
-      max-width: 950px;
-      margin: 16px auto;
-      padding: 0 12px;
-      background: #0b1120;
-      color: #e2e8f0;
-      -webkit-text-size-adjust: 100%;
-    }
-    .header {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 6px;
-      align-items: center;
-      margin-bottom: 12px;
-    }
-    .header-actions {
-      display: flex;
-      gap: 4px;
-      margin-left: auto;
-    }
-    textarea {
-      width: 100%;
-      height: 120px;
-      background: #050811;
-      color: #38bdf8;
-      border: 1px solid #1e293b;
-      border-radius: 6px;
-      padding: 10px;
-      font-family: monospace;
-      font-size: 16px; /* Prevents mobile browser auto-zooming */
-      box-sizing: border-box;
-      resize: vertical;
-    }
-    .controls {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 8px;
-      margin: 10px 0 20px 0;
-    }
-    button {
-      padding: 10px 14px;
-      background: #2563eb;
-      color: white;
-      border: none;
-      border-radius: 6px;
-      cursor: pointer;
-      font-weight: 500;
-      font-size: 14px;
-      touch-action: manipulation;
-    }
-    button:hover { background: #1d4ed8; }
-    button.alt-btn { background: #0284c7; }
-    button.alt-btn:hover { background: #0369a1; }
-    button.danger { background: #dc2626; }
-    button.danger:hover { background: #b91c1c; }
-
-    /* Target Node Card Styling */
-    .node-card {
-      background: #131d31;
-      border: 1px solid #1e293b;
-      border-radius: 8px;
-      padding: 12px;
-      margin-bottom: 12px;
-      box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.2);
-    }
-    .node-header {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      gap: 10px;
-    }
-    .node-meta {
-      display: flex;
-      flex-wrap: wrap;
-      align-items: center;
-      gap: 6px;
-      font-family: monospace;
-      font-size: 14px;
-    }
-    .node-actions {
-      display: flex;
-      gap: 6px;
-      align-items: center;
-      flex-shrink: 0;
-    }
-    .action-btn {
-      padding: 6px 12px;
-      font-size: 12px;
-      font-weight: 600;
-      border-radius: 4px;
-      background: #1e293b;
-      color: #94a3b8;
-      border: 1px solid #334155;
-      min-height: 32px;
-    }
-    .action-btn:hover {
-      background: #334155;
-      color: #f8fafc;
-    }
-    .action-btn.del-btn:hover {
-      background: #7f1d1d;
-      color: #fca5a5;
-      border-color: #991b1b;
-    }
-
-    .ip-title {
-      font-size: 16px;
-      font-weight: 700;
-      color: #38bdf8;
-      cursor: pointer;
-    }
-    .user-tag {
-      color: #f1f5f9;
-      background: #1e293b;
-      border: 1px solid #334155;
-      padding: 2px 6px;
-      border-radius: 4px;
-      font-size: 12px;
-      font-weight: 600;
-    }
-    .hardware-tag {
-      color: #64748b;
-      font-size: 12px;
-    }
-    .stat-badge {
-      padding: 2px 6px;
-      border-radius: 4px;
-      font-size: 11px;
-      font-weight: bold;
-    }
-    .badge-fw {
-      background: #451a03;
-      color: #fb923c;
-      border: 1px solid #7c2d12;
-    }
-    .badge-enc {
-      background: #3b0764;
-      color: #c084fc;
-      border: 1px solid #581c87;
-    }
-    .wallet-container {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 6px;
-      margin: 10px 0 6px 0;
-    }
-    .wallet-tag {
-      background: #0b1329;
-      border: 1px solid #0369a1;
-      color: #38bdf8;
-      padding: 2px 8px;
-      border-radius: 4px;
-      font-family: monospace;
-      font-size: 12px;
-      word-break: break-all;
-    }
-
-    /* Structured Software Grid */
-    .software-section-label {
-      font-size: 11px;
-      text-transform: uppercase;
-      letter-spacing: 0.05em;
-      color: #64748b;
-      margin: 10px 0 6px 0;
-      font-weight: 700;
-    }
-    .software-grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
-      gap: 6px;
-    }
-    .sw-card {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      padding: 6px 10px;
-      border-radius: 4px;
-      font-family: monospace;
-      font-size: 12px;
-    }
-    .sw-loot {
-      background: #062b1b;
-      border: 1px solid #166534;
-      color: #4ade80;
-    }
-    .history-list {
-      margin-top: 10px;
-      padding-top: 8px;
-      border-top: 1px solid #1e293b;
-      font-family: monospace;
-      font-size: 11px;
-      color: #64748b;
-      max-height: 120px;
-      overflow-y: auto;
-    }
-    .history-entry { 
-      padding: 3px 0; 
-      white-space: pre-wrap; 
-      word-break: break-all; 
-    }
-    .section-title {
-      font-size: 13px;
-      font-weight: bold;
-      margin: 18px 0 8px 0;
-      text-transform: uppercase;
-      letter-spacing: 0.05em;
-    }
-    .section-toggle {
-      padding: 0;
-      background: none;
-      color: inherit;
-      font: inherit;
-      text-transform: inherit;
-      letter-spacing: inherit;
-    }
-    .section-toggle:hover { background: none; }
-    .scroll-floater {
-      position: fixed;
-      right: 14px;
-      bottom: 14px;
-      z-index: 10;
-      display: flex;
-      flex-direction: column;
-      gap: 4px;
-    }
-    .scroll-floater button {
-      width: 42px;
-      height: 38px;
-      padding: 0;
-      font-size: 20px;
-      line-height: 1;
-      background: #1e293b;
-      border: 1px solid #475569;
-    }
-    .scroll-floater button:hover { background: #334155; }
-    /* Software Filter Bar */
-    .filter-bar {
-      display: flex;
-      gap: 8px;
-      margin: 14px 0 6px 0;
-    }
-    #softwareFilterInput {
-      flex: 1;
-      min-width: 0;
-      background: #050811;
-      color: #e2e8f0;
-      border: 1px solid #1e293b;
-      border-radius: 6px;
-      padding: 10px;
-      font-family: monospace;
-      font-size: 14px; /* Prevents mobile browser auto-zooming */
-      box-sizing: border-box;
-    }
-    #softwareFilterInput:focus {
-      outline: none;
-      border-color: #2563eb;
-    }
-    .sw-card.sw-match {
-      outline: 2px solid #fbbf24;
-      box-shadow: 0 0 8px rgba(251, 191, 36, 0.35);
-    }
-
-    .header-actions button { padding: 6px 10px; font-size: 12px; }
-
-    /* Intel strip on cards */
-    .intel-row { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
-    .intel-chip {
-      font-size: 11px; font-family: monospace; padding: 3px 7px; border-radius: 4px;
-      background: #0f172a; border: 1px solid #334155; color: #cbd5e1;
-    }
-    .intel-missing { border-color: #92400e; color: #fbbf24; background: #1c1306; }
-    .wallet-tag .income { color: #4ade80; margin-left: 6px; }
-
-    /* Toolbar under the filter */
-    .toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin: 6px 0 4px; font-size: 13px; color: #94a3b8; }
-    .toolbar label { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
-    .toolbar select, .panel input, .panel select {
-      background: #050811; color: #e2e8f0; border: 1px solid #1e293b; border-radius: 6px;
-      padding: 6px 8px; font-size: 14px;
-    }
-    .toolbar input[type=checkbox] { width: 18px; height: 18px; accent-color: #2563eb; }
-    #resultCount { margin-left: auto; font-family: monospace; font-size: 12px; }
-
-    /* Generic panel (My Stats, Knowledge Base) */
-    .panel {
-      background: #0e1628; border: 1px solid #1e293b; border-radius: 8px;
-      padding: 12px; margin: 10px 0 16px;
-    }
-    .panel h3 { margin: 0 0 8px; font-size: 14px; display: flex; align-items: center; gap: 8px; }
-    .panel .hint { font-size: 12px; color: #64748b; margin: 4px 0 0; }
-    .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; }
-    .stats-grid label, .kb-calc-fields label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: #94a3b8; }
-    .panel input[type=number] { width: 100%; box-sizing: border-box; font-size: 16px; }
-
-    /* Knowledge Base */
-    .kb-head { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
-    .kb-head h3 { margin: 0; }
-    .kb-head .close-btn { margin-left: auto; padding: 4px 10px; background: #1e293b; }
-    #kbSearch { width: 100%; box-sizing: border-box; font-size: 16px; padding: 8px 10px; margin-bottom: 10px; }
-    .kb-section-label { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: #64748b; font-weight: 700; margin: 12px 0 6px; }
-    .kb-legend { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
-    details.kb-topic, details.kb-calc {
-      border: 1px solid #1e293b; border-radius: 6px; margin-bottom: 6px; background: #0b1120;
-    }
-    details.kb-topic > summary, details.kb-calc > summary {
-      cursor: pointer; padding: 10px 12px; font-weight: 600; font-size: 14px; list-style: none;
-    }
-    details > summary::-webkit-details-marker { display: none; }
-    details > summary::before { content: "▸ "; color: #64748b; }
-    details[open] > summary::before { content: "▾ "; }
-    .kb-item { padding: 6px 12px 10px; border-top: 1px solid #131d31; font-size: 13px; line-height: 1.45; }
-    .kb-item p { margin: 6px 0 0; }
-    .kb-item ul { margin: 6px 0 0; padding-left: 18px; }
-    .kb-src {
-      display: inline-block; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em;
-      border: 1px solid; border-radius: 3px; padding: 1px 5px; cursor: help;
-    }
-    .kb-table-wrap { overflow-x: auto; margin-top: 6px; }
-    .kb-table { border-collapse: collapse; font-family: monospace; font-size: 12px; min-width: 60%; }
-    .kb-table th, .kb-table td { border: 1px solid #1e293b; padding: 4px 8px; text-align: left; white-space: nowrap; }
-    .kb-table th { background: #131d31; color: #94a3b8; }
-    .kb-calc-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 8px; padding: 0 12px; }
-    .kb-calc-fields .kb-check { flex-direction: row; align-items: center; gap: 6px; padding-top: 18px; }
-    .kb-calc-out {
-      margin: 10px 12px 12px; padding: 8px 10px; background: #050811; border-left: 3px solid #38bdf8;
-      font-family: monospace; font-size: 13px; color: #e2e8f0; line-height: 1.6;
-    }
-    .kb-empty { color: #64748b; font-size: 13px; }
-
-    /* Mobile-Specific Adaptations */
-    @media (max-width: 600px) {
-      body {
-        padding: 0 8px;
-        margin: 10px auto;
-      }
-      .controls button {
-        flex: 1 1 calc(50% - 6px);
-        padding: 12px 6px;
-        font-size: 13px;
-      }
-      .node-header {
-        flex-direction: column;
-        align-items: flex-start;
-      }
-      .node-actions {
-        width: 100%;
-        justify-content: flex-end;
-        border-top: 1px solid #1e293b;
-        padding-top: 8px;
-      }
-      .action-btn {
-        flex: 1;
-        text-align: center;
-        padding: 8px 0;
-      }
-      .software-grid {
-        grid-template-columns: 1fr 1fr;
-      }
-    }
-  </style>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#0b1120">
+  <title>DarkIndex // HackEx 2 Target Intelligence</title>
+  <!-- Compiled from src/tailwind.css (npm run build:css). No CDN needed. -->
+  <link rel="stylesheet" href="style.css">
 </head>
-<body>
+<body class="min-h-screen pb-24">
 
-  <div class="header">
-    <h2 style="margin: 0; font-size: 18px;">Target Intelligence Console</h2>
-    <div class="header-actions" style="flex-wrap: wrap;">
-      <button id="kbToggleBtn" class="alt-btn" aria-expanded="false" aria-controls="kbPanel">📖 Knowledge Base</button>
-      <button id="statsToggleBtn" class="alt-btn" aria-expanded="false" aria-controls="statsPanel">⚙ My Stats</button>
-      <button id="clearBtn" class="danger" style="padding: 6px 10px; font-size: 12px;">Wipe DB</button>
+  <div class="mx-auto max-w-7xl space-y-4 px-3 pt-4 sm:px-6 sm:pt-6 lg:px-8">
+
+    <!-- Header -->
+    <header class="panel flex flex-col items-center justify-between gap-4 md:flex-row">
+      <div class="flex items-center gap-3 self-start md:self-auto">
+        <div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-gradient-to-br from-sky-500 to-indigo-600 text-xl text-white shadow-lg shadow-sky-500/20 ring-1 ring-sky-400/40">⚡</div>
+        <div>
+          <h1 class="bg-gradient-to-r from-sky-400 via-indigo-300 to-purple-400 bg-clip-text font-mono text-xl font-black uppercase tracking-wider text-transparent sm:text-2xl">
+            DarkIndex
+            <span class="ml-1 inline-block rounded-sm border border-sky-500/30 bg-sky-500/10 px-2 py-0.5 align-middle text-[10px] font-normal tracking-normal text-sky-400/80">Web</span>
+          </h1>
+          <p class="mt-0.5 font-mono text-[11px] uppercase tracking-wide text-slate-500">HackEx 2 Target Intelligence Console</p>
+        </div>
+      </div>
+
+      <nav class="grid w-full grid-cols-2 gap-2 sm:flex sm:w-auto sm:flex-wrap sm:justify-end" aria-label="Console actions">
+        <button id="kbToggleBtn" class="btn-indigo" aria-haspopup="dialog" aria-controls="kbModal"><span aria-hidden="true">🧠</span> Knowledge</button>
+        <button id="statsToggleBtn" class="btn-sky" aria-expanded="false" aria-controls="statsPanel"><span aria-hidden="true">⚙</span> My Stats</button>
+        <button id="exportBtn" class="btn-emerald"><span aria-hidden="true">💾</span> Export</button>
+        <button id="importBtn" class="btn-sky"><span aria-hidden="true">📂</span> Import</button>
+        <button id="clearBtn" class="btn-danger col-span-2 sm:col-span-1"><span aria-hidden="true">🗑️</span> Wipe DB</button>
+      </nav>
+    </header>
+
+    <!-- My Stats -->
+    <section id="statsPanel" class="panel animate-fade-in" hidden>
+      <div class="mb-3 flex items-center justify-between">
+        <h2 class="panel-title">My Stats</h2>
+        <span class="font-mono text-[10px] text-slate-600">Saved in this browser only</span>
+      </div>
+      <div class="grid grid-cols-1 gap-3 sm:grid-cols-3">
+        <label class="field-label">Your Bypasser level<input type="number" id="my-bypasser" min="1" inputmode="numeric" class="input" placeholder="e.g. 14"></label>
+        <label class="field-label">Your Password Cracker level<input type="number" id="my-cracker" min="1" inputmode="numeric" class="input" placeholder="e.g. 12"></label>
+        <label class="field-label">Your Spam level<input type="number" id="my-spam" min="1" inputmode="numeric" class="input" placeholder="e.g. 17"></label>
+      </div>
+      <p class="mt-3 text-xs text-slate-500">Used for bypass / crack odds and the Good Spam plan on each target card.</p>
+    </section>
+
+    <!-- Stats bar -->
+    <div class="grid grid-cols-2 gap-3 sm:grid-cols-4">
+      <div class="stat-box group">
+        <span class="stat-label"><span class="h-1.5 w-1.5 rounded-full bg-sky-400 group-hover:animate-ping"></span> Indexed targets</span>
+        <span id="statTotalTargets" class="stat-value text-sky-400">0</span>
+      </div>
+      <div class="stat-box group">
+        <span class="stat-label"><span class="h-1.5 w-1.5 rounded-full bg-purple-400 group-hover:animate-ping"></span> Known wallets</span>
+        <span id="statTotalWallets" class="stat-value text-purple-400">0</span>
+      </div>
+      <div class="stat-box group" title="Sum of the best ₵/hr estimate per target, from 'Stole X Crypto' log lines">
+        <span class="stat-label"><span class="h-1.5 w-1.5 rounded-full bg-amber-400 group-hover:animate-ping"></span> Est. wallet income</span>
+        <span id="statEstIncome" class="stat-value text-amber-400">₵0/hr</span>
+      </div>
+      <div class="stat-box group" title="Full-IP targets still missing a wallet, Bypasser, Firewall or Password Encryptor">
+        <span class="stat-label"><span class="h-1.5 w-1.5 rounded-full bg-rose-400 group-hover:animate-ping"></span> Need scraping</span>
+        <span id="statMissing" class="stat-value text-rose-400">0</span>
+      </div>
     </div>
+
+    <!-- Data ingestion -->
+    <section class="panel space-y-3">
+      <div class="flex items-center justify-between gap-3">
+        <h2 class="panel-title shrink-0 whitespace-nowrap">Data ingestion</h2>
+        <span id="lastIngestStatus" class="truncate text-right font-mono text-xs italic text-slate-500" role="status">Awaiting raw input…</span>
+      </div>
+      <textarea id="dataInput" rows="4" aria-label="Raw HackEx data"
+        placeholder="Paste victim logs, a victim Home screen, or a victim Software screen…"
+        class="input resize-y text-sky-300 sm:text-[13px]"></textarea>
+      <div class="flex gap-2">
+        <button id="processDataBtn" class="btn-primary flex-1 py-2.5 sm:flex-none sm:px-8">Process data</button>
+        <button id="undoBtn" class="btn-ghost py-2.5" disabled>↶ Undo last</button>
+      </div>
+    </section>
+
+    <!-- Filter -->
+    <section class="panel space-y-3">
+      <h2 class="panel-title">Intelligence filter</h2>
+      <div class="flex gap-2">
+        <input type="search" id="softwareFilterInput" autocomplete="off" aria-label="Filter targets" class="input flex-1 focus:border-purple-500 focus:ring-purple-500"
+          placeholder="lvl 30 · sw 20 · fw 12 · Firewall Lv.10 · user:Name  (space = AND, | = OR)">
+        <button id="clearFilterBtn" class="btn-ghost">Clear</button>
+      </div>
+      <div class="flex flex-wrap items-center gap-2">
+        <button class="chip-btn" data-toggle="advanced" aria-pressed="false" title="Only full targets missing a wallet, Bypasser, Firewall or Password Encryptor">🎯 Missing data</button>
+        <button class="chip-btn" data-sort="spam" aria-pressed="false" title="Rank by Spam ₵/hr using your Spam level">📧 Good Spam</button>
+        <button class="chip-btn" data-sort="income" aria-pressed="false" title="Rank by estimated wallet income">💰 Top income</button>
+        <button class="chip-btn" data-filter="wallet:hx" title="Targets with a known wallet">👛 Has wallet</button>
+        <button class="chip-btn" data-filter="sw 20" title="Any stealable app at exactly Lv20">📦 Loot Lv20</button>
+      </div>
+      <div class="flex flex-wrap items-center gap-x-4 gap-y-2 border-t border-cyber-border pt-3 font-mono text-xs text-slate-400">
+        <label class="flex cursor-pointer items-center gap-2"><input type="checkbox" id="advancedToggle" class="check"> Advanced targeting</label>
+        <label class="flex items-center gap-2">Sort
+          <select id="sortSelect" class="input w-auto py-1.5 text-xs">
+            <option value="ip">IP</option>
+            <option value="spam">Good Spam (₵/hr)</option>
+            <option value="income">Wallet income</option>
+          </select>
+        </label>
+        <span id="resultCount" class="ml-auto text-slate-500"></span>
+      </div>
+    </section>
+
+    <!-- Targets -->
+    <main class="space-y-4 pt-2">
+      <h2 class="flex items-center gap-2 border-b border-cyber-border pb-2 font-mono text-xs font-bold uppercase tracking-widest text-sky-400">
+        Complete targets
+        <span id="fullTargetCount" class="rounded-sm border border-sky-800 bg-sky-950 px-2 py-0.5 text-[10px] text-sky-300">0</span>
+      </h2>
+      <div id="fullIpContainer" class="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3"></div>
+
+      <div class="border-b border-cyber-border pb-2 pt-4">
+        <button id="partialToggleBtn" aria-expanded="false" aria-controls="partialIpContainer"
+          class="flex items-center gap-2 font-mono text-xs font-bold uppercase tracking-widest text-amber-500 transition hover:text-amber-400">
+          <span id="partialToggleIcon" class="inline-block transition-transform duration-200" aria-hidden="true">▶</span>
+          Partial / masked targets
+          <span id="partialTargetCount" class="rounded-sm border border-amber-900/50 bg-amber-950/50 px-2 py-0.5 text-[10px] text-amber-500">0</span>
+        </button>
+      </div>
+      <div id="partialIpContainer" class="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3" hidden></div>
+    </main>
   </div>
 
-  <section id="statsPanel" class="panel" hidden>
-    <h3>⚙ My Stats</h3>
-    <div class="stats-grid">
-      <label>Your Bypasser level<input type="number" id="my-bypasser" min="1" inputmode="numeric"></label>
-      <label>Your Password Cracker level<input type="number" id="my-cracker" min="1" inputmode="numeric"></label>
-      <label>Your Spam level<input type="number" id="my-spam" min="1" inputmode="numeric"></label>
+  <!-- Scroll buttons -->
+  <div class="fixed bottom-4 right-4 z-30 flex flex-col gap-1.5" aria-label="Page navigation">
+    <button id="scrollTopBtn" class="btn-ghost h-10 w-10 p-0 text-base shadow-lg shadow-black/50" title="Scroll to top" aria-label="Scroll to top">↑</button>
+    <button id="scrollBottomBtn" class="btn-ghost h-10 w-10 p-0 text-base shadow-lg shadow-black/50" title="Scroll to bottom" aria-label="Scroll to bottom">↓</button>
+  </div>
+
+  <!-- Toast -->
+  <div id="toast" class="fixed bottom-6 left-1/2 z-[60] max-w-[90vw] -translate-x-1/2 rounded-lg border border-sky-500/40 bg-cyber-card px-4 py-2.5 font-mono text-xs text-sky-200 shadow-xl shadow-black/60 animate-toast-in" role="status" hidden></div>
+
+  <!-- Knowledge base modal -->
+  <div id="kbModal" class="fixed inset-0 z-50 flex items-stretch justify-center bg-black/80 p-0 backdrop-blur-sm sm:items-center sm:p-6" role="dialog" aria-modal="true" aria-labelledby="kbTitle" hidden>
+    <div class="flex h-full w-full max-w-5xl flex-col overflow-hidden border-indigo-500/40 bg-cyber-card shadow-[0_0_30px_rgba(99,102,241,.2)] animate-fade-in sm:h-[85vh] sm:rounded-xl sm:border">
+      <div class="flex items-center gap-3 border-b border-cyber-border bg-cyber-well px-4 py-3 sm:px-6 sm:py-4">
+        <h2 id="kbTitle" class="flex items-center gap-2 font-mono text-sm font-bold uppercase tracking-widest text-indigo-400 sm:text-lg"><span aria-hidden="true">🧠</span> Knowledge base</h2>
+        <button id="kbCloseBtn" class="ml-auto flex h-9 w-9 items-center justify-center rounded-lg text-2xl text-slate-400 transition hover:bg-slate-800 hover:text-white" aria-label="Close knowledge base">&times;</button>
+      </div>
+      <div class="border-b border-cyber-border px-4 py-3 sm:px-6">
+        <input type="search" id="kbSearch" class="input focus:border-indigo-500 focus:ring-indigo-500" placeholder="Search every topic… (spam, odds, proxy, decay)" autocomplete="off">
+      </div>
+      <div class="flex min-h-0 flex-1 flex-col md:flex-row">
+        <nav id="kbNav" class="flex shrink-0 overflow-x-auto border-b border-cyber-border bg-cyber-bg md:w-60 md:flex-col md:overflow-y-auto md:overflow-x-hidden md:border-b-0 md:border-r" aria-label="Knowledge base topics"></nav>
+        <div id="kbContentArea" class="min-h-0 flex-1 space-y-3 overflow-y-auto p-4 sm:p-6"></div>
+      </div>
     </div>
-    <p class="hint">Used for bypass/crack odds and Good Spam ranking on each card. Saved in this browser only.</p>
-  </section>
-
-  <section id="kbPanel" class="panel" hidden>
-    <div class="kb-head">
-      <h3>📖 Knowledge Base</h3>
-      <button id="kbCloseBtn" class="close-btn" aria-label="Close knowledge base">✕</button>
-    </div>
-    <div class="kb-section-label">Calculators</div>
-    <div id="kbCalcs"></div>
-    <div class="kb-section-label">Reference</div>
-    <div class="kb-legend">
-      <span class="kb-src" style="color:#22c55e;border-color:#22c55e">Measured</span>
-      <span class="kb-src" style="color:#38bdf8;border-color:#38bdf8">Calculated</span>
-      <span class="kb-src" style="color:#a3e635;border-color:#a3e635">Confirmed</span>
-      <span class="kb-src" style="color:#fbbf24;border-color:#fbbf24">Guide</span>
-      <span class="kb-src" style="color:#fb923c;border-color:#fb923c">Empirical</span>
-    </div>
-    <input type="search" id="kbSearch" class="kb-search" placeholder="Search the knowledge base… (spam, odds, proxy)" autocomplete="off">
-    <div id="kbTopics"></div>
-  </section>
-
-  <textarea id="dataInput" placeholder="Paste data here (Logs, Home Screen, or Software Screen)..."></textarea>
-  
-<div class="controls">
-    <button id="processDataBtn">Process Data</button>
-    <button id="undoBtn" style="background: #475569;" disabled>Undo Last Ingest</button>
-  </div>
-
-  <div class="filter-bar">
-    <input type="text" id="softwareFilterInput" placeholder='Filter — Firewall Lv.10 · lvl 30 · sw 20 · fw 12 · user:Name (space = AND, | = OR)' autocomplete="off">
-    <button id="clearFilterBtn" class="alt-btn" style="padding: 10px 14px; font-size: 13px;">Clear</button>
-  </div>
-
-  <div class="toolbar">
-    <label title="Only real targets missing a wallet, Bypasser, Firewall or Password Encryptor"><input type="checkbox" id="advancedToggle"> Advanced targeting</label>
-    <label>Sort
-      <select id="sortSelect">
-        <option value="ip">IP</option>
-        <option value="spam">Good Spam (₵/hr)</option>
-        <option value="income">Wallet income</option>
-      </select>
-    </label>
-    <span id="resultCount"></span>
-  </div>
-
-  <div class="section-title" style="color: #60a5fa;">Full Targets</div>
-  <div id="fullIpContainer"></div>
-
-  <div class="section-title" style="color: #fbbf24;">
-    <button id="partialToggleBtn" class="section-toggle" aria-expanded="false">v Partial / Masked Targets v</button>
-  </div>
-  <div id="partialIpContainer" hidden></div>
-
-  <div class="scroll-floater" aria-label="Page navigation">
-    <button id="scrollTopBtn" title="Scroll to top" aria-label="Scroll to top">↑</button>
-    <button id="scrollBottomBtn" title="Scroll to bottom" aria-label="Scroll to bottom">↓</button>
   </div>
 
   <script src="estimator.js"></script>

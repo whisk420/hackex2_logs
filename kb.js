@@ -250,7 +250,7 @@
   }
   function badge(src) {
     const s = SOURCES[src] || SOURCES.unknown;
-    return `<span class="kb-src" style="color:${s.color};border-color:${s.color}" title="${esc(s.tip)}">${s.label}</span>`;
+    return `<span class="kb-src" style="color:${s.color};border-color:${s.color}66;background:${s.color}14" title="${esc(s.tip)}">${s.label}</span>`;
   }
   function itemText(it) {
     const parts = [it.text || ""];
@@ -268,36 +268,28 @@
     }
     return `<div class="kb-item">${badge(it.source)}${body}</div>`;
   }
-
-  function renderTopics(query) {
-    const q = (query || "").trim().toLowerCase();
-    const host = document.getElementById("kbTopics");
-    let shown = 0;
-    host.innerHTML = TOPICS.map((t) => {
-      const items = q ? t.items.filter((it) => t.title.toLowerCase().includes(q) || itemText(it).includes(q)) : t.items;
-      if (!items.length) return "";
-      shown++;
-      return `<details class="kb-topic"${q ? " open" : ""}><summary>${esc(t.title)}</summary>${items.map(renderItem).join("")}</details>`;
-    }).join("");
-    if (!shown) host.innerHTML = `<p class="kb-empty">Nothing matches “${esc(query)}”.</p>`;
+  function topicHeading(title) {
+    return `<h3 class="border-b border-cyber-border pb-3 font-mono text-lg font-bold text-indigo-300">${esc(title)}</h3>`;
   }
+  const legend = () =>
+    `<div class="flex flex-wrap items-center gap-1.5 pt-2 font-mono text-[10px] text-slate-500">Sources: ${["measured", "calculated", "confirmed", "guide", "empirical"].map(badge).join("")}</div>`;
 
-  function renderCalculators() {
-    const host = document.getElementById("kbCalcs");
-    host.innerHTML = CALCS.map((c) => {
+  // ---- Calculators view ----
+  function calculatorsHtml() {
+    return topicHeading("🧮 Calculators") + `<div class="grid grid-cols-1 gap-3 lg:grid-cols-2">` + CALCS.map((c) => {
       const inputs = c.fields.map(([id, label, def, opt]) => {
-        const name = `${c.id}-${id}`;
         if (opt && opt.type === "check") {
-          return `<label class="kb-check"><input type="checkbox" data-f="${id}" ${def ? "checked" : ""}> ${esc(label)}</label>`;
+          return `<label class="kb-check"><input type="checkbox" class="check" data-f="${id}" ${def ? "checked" : ""}> ${esc(label)}</label>`;
         }
         if (opt && opt.type === "select") {
-          return `<label>${esc(label)}<select data-f="${id}" id="${name}">${opt.options.map((o) => `<option${o === def ? " selected" : ""}>${esc(o)}</option>`).join("")}</select></label>`;
+          return `<label class="field-label">${esc(label)}<select class="input py-2" data-f="${id}">${opt.options.map((o) => `<option${o === def ? " selected" : ""}>${esc(o)}</option>`).join("")}</select></label>`;
         }
-        return `<label>${esc(label)}<input type="number" inputmode="decimal" step="any" data-f="${id}" id="${name}" value="${def}"></label>`;
+        return `<label class="field-label">${esc(label)}<input class="input py-2" type="number" inputmode="decimal" step="any" data-f="${id}" value="${def}"></label>`;
       }).join("");
-      return `<details class="kb-calc" data-calc="${c.id}"><summary>🧮 ${esc(c.title)}</summary><div class="kb-calc-fields">${inputs}</div><div class="kb-calc-out"></div></details>`;
-    }).join("");
-
+      return `<div class="kb-calc" data-calc="${c.id}"><div class="kb-calc-title">${esc(c.title)}</div><div class="kb-calc-fields">${inputs}</div><div class="kb-calc-out"></div></div>`;
+    }).join("") + `</div>`;
+  }
+  function wireCalculators(host) {
     host.querySelectorAll(".kb-calc").forEach((el) => {
       const calc = CALCS.find((c) => c.id === el.dataset.calc);
       const update = () => {
@@ -318,22 +310,77 @@
     });
   }
 
-  function init() {
-    const panel = document.getElementById("kbPanel");
-    const btn = document.getElementById("kbToggleBtn");
-    if (!panel || !btn) return;
-    renderCalculators();
-    renderTopics("");
-    btn.addEventListener("click", () => {
-      panel.hidden = !panel.hidden;
-      btn.setAttribute("aria-expanded", String(!panel.hidden));
-      if (!panel.hidden) panel.scrollIntoView({ behavior: "smooth", block: "start" });
-    });
-    document.getElementById("kbCloseBtn").addEventListener("click", () => { panel.hidden = true; btn.setAttribute("aria-expanded", "false"); });
-    document.getElementById("kbSearch").addEventListener("input", (e) => renderTopics(e.target.value));
+  // ---- Navigation / views ----
+  const CALC_ID = "__calcs";
+  let current = CALC_ID;
+
+  function renderNav() {
+    const nav = document.getElementById("kbNav");
+    const entries = [[CALC_ID, "🧮 Calculators"], ...TOPICS.map((t) => [t.id, t.title])];
+    nav.innerHTML = entries.map(([id, title]) =>
+      `<button class="kb-nav-item${id === current ? " active" : ""}" data-kb-id="${id}"${id === current ? ' aria-current="true"' : ""}>${esc(title)}</button>`
+    ).join("");
   }
 
-  window.KnowledgeBase = { TOPICS, CALCS, SOURCES };
+  function show(id) {
+    current = id;
+    document.getElementById("kbSearch").value = "";
+    renderNav();
+    const area = document.getElementById("kbContentArea");
+    if (id === CALC_ID) {
+      area.innerHTML = calculatorsHtml();
+      wireCalculators(area);
+    } else {
+      const t = TOPICS.find((x) => x.id === id);
+      area.innerHTML = topicHeading(t.title) + t.items.map(renderItem).join("") + legend();
+    }
+    area.scrollTop = 0;
+    const active = document.querySelector("#kbNav .active");
+    if (active) active.scrollIntoView({ block: "nearest", inline: "nearest" });
+  }
+
+  function search(query) {
+    const q = query.trim().toLowerCase();
+    if (!q) return show(current);
+    document.querySelectorAll("#kbNav .kb-nav-item").forEach((b) => b.classList.remove("active"));
+    const area = document.getElementById("kbContentArea");
+    const hits = TOPICS.map((t) => ({ t, items: t.items.filter((it) => t.title.toLowerCase().includes(q) || itemText(it).includes(q)) }))
+      .filter((x) => x.items.length);
+    area.innerHTML = hits.length
+      ? hits.map(({ t, items }) => topicHeading(t.title) + items.map(renderItem).join("")).join("")
+      : `<p class="py-10 text-center font-mono text-sm text-slate-500">Nothing matches “${esc(query)}”.</p>`;
+    area.scrollTop = 0;
+  }
+
+  function open() {
+    const modal = document.getElementById("kbModal");
+    modal.hidden = false;
+    document.body.style.overflow = "hidden";
+    show(current);
+    document.getElementById("kbCloseBtn").focus();
+  }
+  function close() {
+    document.getElementById("kbModal").hidden = true;
+    document.body.style.overflow = "";
+    document.getElementById("kbToggleBtn").focus();
+  }
+
+  function init() {
+    const modal = document.getElementById("kbModal");
+    if (!modal) return;
+    document.getElementById("kbToggleBtn").addEventListener("click", open);
+    document.getElementById("kbCloseBtn").addEventListener("click", close);
+    modal.addEventListener("click", (e) => { if (e.target === modal) close(); });
+    document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !modal.hidden) close(); });
+    document.getElementById("kbNav").addEventListener("click", (e) => {
+      const btn = e.target.closest("[data-kb-id]");
+      if (btn) show(btn.dataset.kbId);
+    });
+    document.getElementById("kbSearch").addEventListener("input", (e) => search(e.target.value));
+    renderNav();
+  }
+
+  window.KnowledgeBase = { TOPICS, CALCS, SOURCES, open, close };
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", init);
   else init();
 })();
