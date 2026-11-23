@@ -1,0 +1,193 @@
+// Pure game-math helpers ported from DarkIndex (GameFormulas.kt, TargetRecord.kt, GoodSpamUtils.kt).
+// No DOM / DB access here so it can be unit-tested in Node.
+(function (root) {
+  "use strict";
+
+  // ---------- Hack odds (measured by DarkIndex's author) ----------
+  function hackOdds(myLevel, theirLevel) {
+    if (myLevel == null || theirLevel == null) return null;
+    const d = myLevel - theirLevel;
+    if (d >= 6) return 95;
+    const table = { 5: 90, 4: 82, 3: 74, 2: 66, 1: 58, 0: 50, "-1": 42, "-2": 34, "-3": 18 };
+    return table[d] !== undefined ? table[d] : 5;
+  }
+
+  // ---------- Spam income model ----------
+  const SPAM_CAP_PER_HOUR = 100;
+  const SPAM_MAX_BONUS = 1.475;
+
+  function spamMaxIncome(L) {
+    return L <= 0 ? 0 : 13.9 + 4.3 * L + 0.0645 * L * L;
+  }
+  function spamGapMultiplier(victimLevel, spamLevel) {
+    const gap = victimLevel - spamLevel;
+    if (gap > 0) return Math.min(1 + 0.04 * gap, SPAM_MAX_BONUS);
+    if (gap < 0) return Math.max(1 + 0.05 * gap, 0.10);
+    return 1.0;
+  }
+  // Fresh (undecayed) ₵/hr for a Spam of `spamLevel` on a victim of `victimLevel`.
+  function spamIncome(spamLevel, victimLevel) {
+    if (spamLevel <= 0 || victimLevel == null) return 0;
+    const base = spamMaxIncome(spamLevel) / SPAM_MAX_BONUS;
+    return Math.min(Math.round(base * spamGapMultiplier(victimLevel, spamLevel)), SPAM_CAP_PER_HOUR);
+  }
+  function spamDecayFactor(days, scythe) {
+    const d = scythe ? days / 2 : days;
+    if (d <= 21) return 1.0;
+    return Math.max(0.10, 1 - ((d - 21) * 0.90) / 79);
+  }
+  // First level (lowest on ties) with the strictly highest income, searching 1..max.
+  function spamBestLevel(victimLevel, max) {
+    let best = 1, bestInc = -1;
+    for (let l = 1; l <= max; l++) {
+      const inc = spamIncome(l, victimLevel);
+      if (inc > bestInc) { bestInc = inc; best = l; }
+    }
+    return best;
+  }
+  // Cheapest Spam level that reaches the $100/hr cap, or null.
+  function spamCapLevel(victimLevel, max) {
+    for (let l = 1; l <= (max || 60); l++) {
+      if (spamIncome(l, victimLevel) >= SPAM_CAP_PER_HOUR) return l;
+    }
+    return null;
+  }
+  // installed = the Spam level you own (0 = unknown / don't clamp).
+  function spamPlan(victimLevel, installed) {
+    installed = installed || 0;
+    if (victimLevel == null) return { uploadLevel: 20, income: null, capReachable: false, recommended: 20 };
+    const searchTop = Math.max(30, installed);
+    const minCap = spamCapLevel(victimLevel, searchTop);
+    const recommended = minCap != null ? minCap : spamBestLevel(victimLevel, searchTop);
+    const top = installed > 0 ? Math.min(recommended, installed) : recommended;
+    const uploadLevel = spamBestLevel(victimLevel, top);
+    return { uploadLevel, income: spamIncome(uploadLevel, victimLevel), capReachable: minCap != null, recommended };
+  }
+  // records -> [{record, plan}] ranked: income desc (unknown last), then lowest firewall.
+  function rankForSpam(records, installed) {
+    return records
+      .map((record) => ({ record, plan: spamPlan(record.level, installed) }))
+      .sort((a, b) => {
+        const ai = a.plan.income == null ? -1 : a.plan.income;
+        const bi = b.plan.income == null ? -1 : b.plan.income;
+        if (bi !== ai) return bi - ai;
+        return (a.record.firewall || 0) - (b.record.firewall || 0);
+      });
+  }
+
+  // ---------- Virus upload time ----------
+  // Seconds to upload a Lv20 virus on a 1.0x network by victim hardware tier (DarkIndex empirical table).
+  const UPLOAD_BASE_SECONDS = [45285, 60390, 75480, 90585, 105720, 120825, 135930, 151035, 166140, 181245];
+  function uploadSecondsLv20(tier, networkBoost) {
+    const base = UPLOAD_BASE_SECONDS[tier] !== undefined ? UPLOAD_BASE_SECONDS[tier] : 90585;
+    return Math.max(1, Math.trunc(base / (networkBoost || 1)));
+  }
+  function uploadSecondsForLevel(tier, networkBoost, virusLevel) {
+    const t20 = uploadSecondsLv20(tier, networkBoost);
+    return Math.max(1, Math.trunc(t20 * Math.pow(Math.max(virusLevel, 1) / 20, 2.25)));
+  }
+  function formatDuration(sec) {
+    const m = Math.floor(sec / 60);
+    if (m >= 60) return `${Math.floor(m / 60)}h ${m % 60}m`;
+    if (m >= 1) return `${m}m ${sec % 60}s`;
+    return `${sec}s`;
+  }
+
+  // ---------- Siphon ----------
+  function siphonPercent(L) {
+    return L <= 0 ? null : Math.min(0.75 + 0.25 * L, 6.0);
+  }
+
+  // ---------- Wallet income estimator ----------
+  // thefts: [{m: minutesSinceEpoch-ish, a: amount}]. Sessions split on gaps > 60 min; sessions longer
+  // than 7 days are re-split into fixed 7-day windows. Rate = (sum of amounts except first) / hours.
+  function theftClusters(thefts) {
+    const ev = (thefts || []).slice().sort((x, y) => x.m - y.m);
+    const raw = [];
+    let cur = [];
+    for (const e of ev) {
+      if (cur.length && e.m - cur[cur.length - 1].m > 60) { raw.push(cur); cur = []; }
+      cur.push(e);
+    }
+    if (cur.length) raw.push(cur);
+
+    const WEEK = 7 * 24 * 60;
+    const out = [];
+    for (const c of raw) {
+      if (c[c.length - 1].m - c[0].m <= WEEK) { out.push(c); continue; }
+      let win = [], start = null;
+      for (const e of c) {
+        if (start === null) start = e.m;
+        if (e.m - start <= WEEK) win.push(e);
+        else { out.push(win); win = [e]; start = e.m; }
+      }
+      if (win.length) out.push(win);
+    }
+    return out;
+  }
+  // -> {perHour:number}|{single:number}|null
+  function estimateIncome(thefts) {
+    const clusters = theftClusters(thefts);
+    if (!clusters.length) return null;
+    const rates = [];
+    for (const c of clusters) {
+      if (c.length < 2) continue;
+      const hours = (c[c.length - 1].m - c[0].m) / 60;
+      if (hours < 0.1) continue;
+      const income = c.slice(1).reduce((s, e) => s + e.a, 0);
+      rates.push(income / hours);
+    }
+    if (rates.length) return { perHour: Math.trunc(rates.reduce((s, r) => s + r, 0) / rates.length) };
+    const latest = (thefts || []).reduce((b, e) => (!b || e.m > b.m ? e : b), null);
+    return latest ? { single: latest.a } : null;
+  }
+  function formatAmount(n) {
+    return n >= 10000 ? (n / 1000).toFixed(1) + "k" : Math.trunc(n).toLocaleString("en-US");
+  }
+  function formatIncome(est) {
+    if (!est) return null;
+    return est.perHour !== undefined ? `₵${formatAmount(est.perHour)}/hr` : `₵${formatAmount(est.single)}`;
+  }
+
+  // ---------- Advanced targeting ----------
+  // True when a real (unmasked, non-temporary) target is missing data a hacker needs.
+  function needsAdvancedTargeting(r) {
+    if (!r || !r.ip || r.ip.includes("xxx") || r.ip.startsWith("unknown:")) return false;
+    const d = r.downloads || {};
+    return !(r.wallets && r.wallets.length) || !d["Bypasser"] || !d["Firewall"] || !d["Password Encryptor"];
+  }
+  function advancedTargetingMissing(r) {
+    const d = r.downloads || {}, out = [];
+    if (!(r.wallets && r.wallets.length)) out.push("wallet");
+    for (const k of ["Bypasser", "Firewall", "Password Encryptor"]) if (!d[k]) out.push(k);
+    return out;
+  }
+
+  // ---------- Misc formulas used by the knowledge-base calculators ----------
+  function proxyCost(level, hours, discount) {
+    return Math.ceil(10 * Math.sqrt(level) * hours * (1 - (discount || 0)));
+  }
+  function avRemovalPercent(av, virus) {
+    const d = av - virus;
+    if (d >= 5) return 95;
+    if (d >= 0) return 50 + 10 * d;
+    if (d === -1) return 20;
+    return Math.max(5, 20 - 2 * (-d - 1));
+  }
+  function keygenCubic(L) { return (-L * L * L + 147 * L * L + 6814 * L - 10212) / 6; }
+  function storePrice(base, level, defensive) {
+    const raw = Math.max(0, keygenCubic(level)) * base / 600 * (defensive ? 0.85 : 1);
+    return defensive ? Math.ceil(raw) : Math.round(raw);
+  }
+
+  const api = {
+    hackOdds, SPAM_CAP_PER_HOUR, spamMaxIncome, spamGapMultiplier, spamIncome, spamDecayFactor,
+    spamBestLevel, spamCapLevel, spamPlan, rankForSpam,
+    UPLOAD_BASE_SECONDS, uploadSecondsLv20, uploadSecondsForLevel, formatDuration,
+    siphonPercent, theftClusters, estimateIncome, formatAmount, formatIncome,
+    needsAdvancedTargeting, advancedTargetingMissing,
+    proxyCost, avRemovalPercent, keygenCubic, storePrice
+  };
+  root.Estimator = api;
+  if (typeof module !== "undefined" && module.exports) module.exports = api;
+})(typeof window !== "undefined" ? window : globalThis);

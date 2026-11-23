@@ -4,9 +4,6 @@ const STORE_NAME = "targets";
 const ARCHIVE_STORE_NAME = "ingestArchive";
 let db;
 
-// --- New Global Log History ---
-const logHistory = [];
-
 const dbReq = indexedDB.open(DB_NAME, 2);
 
 dbReq.onupgradeneeded = (e) => {
@@ -236,12 +233,17 @@ function parseVictimLogs(rawLines) {
             }
         }
 
-        const walletMatch = line.match(/(?:Stole\s+\d[\d,]*\s+Crypto\s+from|\d[\d,]*\s+Crypto\s+transferred\s+to)\s+(hx[a-zA-Z0-9.]+)/i);
+        const walletMatch = line.match(/(Stole\s+(\d[\d,]*)\s+Crypto\s+from|\d[\d,]*\s+Crypto\s+transferred\s+to)\s+(hx[a-zA-Z0-9.]+)/i);
         if (walletMatch) {
           const withinCorrelationWindow = lastAccess && eventMinute !== null && lastAccess.eventMinute !== null &&
             eventMinute >= lastAccess.eventMinute && eventMinute - lastAccess.eventMinute <= 2;
           if (withinCorrelationWindow) {
-            updates.push({ ip: lastAccess.ip, time, wallet: walletMatch[1], raw: line });
+            const update = { ip: lastAccess.ip, time, wallet: walletMatch[3], raw: line };
+            // Theft amount + time feed the passive wallet income estimator.
+            if (walletMatch[2] && eventMinute !== null) {
+              update.theft = { m: eventMinute, a: parseInt(walletMatch[2].replace(/,/g, ""), 10) };
+            }
+            updates.push(update);
           }
           continue;
         }
@@ -361,8 +363,38 @@ function initializeRecord(ip) {
     firewall: null,
     encryptor: null,
     wallets: [],
-    downloads: {}
+    downloads: {},
+    thefts: {} // wallet -> [{m: event minute, a: amount}]
   };
+}
+
+// Union of two wallet->theft-list maps, deduplicated by (minute, amount).
+function mergeThefts(a, b) {
+  const out = {};
+  for (const src of [a || {}, b || {}]) {
+    for (const [wallet, list] of Object.entries(src)) {
+      const seen = new Set((out[wallet] || []).map((e) => `${e.m}:${e.a}`));
+      out[wallet] = out[wallet] || [];
+      for (const e of list || []) {
+        const key = `${e.m}:${e.a}`;
+        if (!seen.has(key)) { seen.add(key); out[wallet].push(e); }
+      }
+    }
+  }
+  return out;
+}
+
+// Best available income estimate across a record's wallets (highest per-hour wins).
+function recordIncome(record) {
+  let best = null;
+  for (const list of Object.values(record.thefts || {})) {
+    const est = Estimator.estimateIncome(list);
+    if (!est) continue;
+    const val = est.perHour !== undefined ? est.perHour : -1;
+    const bestVal = best ? (best.perHour !== undefined ? best.perHour : -1) : -2;
+    if (val > bestVal) best = est;
+  }
+  return best;
 }
 
 function archiveIngest(type, rawText) {
@@ -426,7 +458,8 @@ function mergeTargetRecords(base, incoming) {
     firewall: incoming.firewall || base.firewall || null,
     encryptor: incoming.encryptor || base.encryptor || null,
     wallets: Array.from(new Set([...(base.wallets || []), ...(incoming.wallets || [])])),
-    downloads: { ...(base.downloads || {}), ...(incoming.downloads || {}) }
+    downloads: { ...(base.downloads || {}), ...(incoming.downloads || {}) },
+    thefts: mergeThefts(base.thefts, incoming.thefts)
   };
 
   return {
@@ -473,6 +506,7 @@ async function mergeUpdates(updates) {
         existingMap.set(item.ip, record);
       }
       if (!record.wallets.includes(item.wallet)) record.wallets.push(item.wallet);
+      if (item.theft) record.thefts = mergeThefts(record.thefts, { [item.wallet]: [item.theft] });
     }
 
     if (item.software && item.isOwnedSoftware) {
@@ -816,8 +850,17 @@ function isIpToken(token) {
   return /^(?:(?:\d{1,3}|xxx)\.){3}(?:\d{1,3}|xxx)$/i.test(String(token));
 }
 
-// Parses a filter query into OR groups (split by "|"); each group is an AND list of {name, level} conditions.
-// Examples: "Bypasser Lv.9" | "Spam Lv.3 Bypasser" | "Password Cracker Lv.5"
+// DarkIndex-style aliases for app names.
+const SOFTWARE_ALIASES = {
+  fw: "Firewall", enc: "Password Encryptor", encryptor: "Password Encryptor", av: "Antivirus",
+  bp: "Bypasser", bypass: "Bypasser", pc: "Password Cracker", crack: "Password Cracker", cracker: "Password Cracker",
+  rk: "Rootkit"
+};
+// Apps you can steal (Firewall and Keygen excluded) — used by the "sw N" shortcut.
+const LOOT_APPS = ["Password Encryptor", "Antivirus", "Proxy", "Trace", "Bypasser", "Password Cracker", "Spam", "Siphon", "Rootkit"];
+
+// Parses a filter query into OR groups (split by "|"); each group is an AND list of conditions.
+// Examples: "Bypasser Lv.9" | "Spam Lv.3 Bypasser" | "lvl 28-32" | "sw 20" | "fw 12" | "user:Bob" | "wallet:hx12"
 function parseSoftwareQuery(query) {
   if (!query || !query.trim()) return null;
 
@@ -827,6 +870,56 @@ function parseSoftwareQuery(query) {
     let i = 0;
 
     while (i < tokens.length) {
+      const tok = tokens[i];
+      const lower = tok.toLowerCase();
+
+      // Prefixed text filters: user:Name, clan:TAG, wallet:hx...
+      const prefixed = tok.match(/^(user|username|clan|wallet|hw|hardware):(.+)$/i);
+      if (prefixed) {
+        const field = { user: "username", username: "username", clan: "clan", wallet: "wallet", hw: "hardware", hardware: "hardware" }[prefixed[1].toLowerCase()];
+        conditions.push({ type: "field", field, value: prefixed[2].toLowerCase() });
+        i++;
+        continue;
+      }
+      if (/^hx[a-z0-9.]{3,}$/i.test(tok)) {
+        conditions.push({ type: "field", field: "wallet", value: lower });
+        i++;
+        continue;
+      }
+
+      // Player level: "lvl 30", "lvl28-32", "level 30"
+      const lvlRange = (lower + (tokens[i + 1] && /^\d/.test(tokens[i + 1]) && /^(?:lvl|lv|level)\.?$/.test(lower) ? tokens[i + 1] : ""))
+        .match(/^(?:lvl|lv|level)\.?(\d+)(?:-(\d+))?$/);
+      if (lvlRange) {
+        const lo = parseInt(lvlRange[1], 10);
+        conditions.push({ type: "playerLevel", min: lo, max: lvlRange[2] ? parseInt(lvlRange[2], 10) : lo });
+        i += /^(?:lvl|lv|level)\.?$/.test(lower) ? 2 : 1;
+        continue;
+      }
+
+      // Any loot app at exactly level N: "sw 20", "all 20", "software 20"
+      if (/^(?:sw|software|all)$/.test(lower) && tokens[i + 1]) {
+        const lvl = parseLevelToken(tokens[i + 1]) ?? (/^\d+$/.test(tokens[i + 1]) ? parseInt(tokens[i + 1], 10) : null);
+        if (lvl !== null) {
+          conditions.push({ type: "anyLoot", level: lvl });
+          i += 2;
+          continue;
+        }
+      }
+
+      // Alias + level with ±2 spread: "fw 12", "bp9", "spam 17"
+      const aliasMatch = lower.match(/^([a-z]+?)(\d+)?$/);
+      if (aliasMatch && SOFTWARE_ALIASES[aliasMatch[1]]) {
+        let lvl = aliasMatch[2] ? parseInt(aliasMatch[2], 10) : null;
+        i++;
+        if (lvl === null && tokens[i]) {
+          const next = parseLevelToken(tokens[i]) ?? (/^\d+$/.test(tokens[i]) ? parseInt(tokens[i], 10) : null);
+          if (next !== null) { lvl = next; i++; }
+        }
+        conditions.push({ type: "software", name: SOFTWARE_ALIASES[aliasMatch[1]].toLowerCase(), level: lvl, spread: lvl !== null ? 2 : 0 });
+        continue;
+      }
+
       if (isIpToken(tokens[i])) {
         conditions.push({ type: "ip", value: tokens[i].toLowerCase() });
         i++;
@@ -864,13 +957,13 @@ function parseSoftwareQuery(query) {
           }
         }
       } else {
-        // Bare token: could be a partial name; stray level words / numbers are ignored
+        // Bare token: free text (username/clan/wallet/hardware) or a partial app name; stray level words / numbers are ignored
         const lvlOnly = parseLevelToken(tokens[i]) !== null || isLevelWord(tokens[i]);
-        if (!lvlOnly && !/^\d+$/.test(tokens[i])) conditions.push({ type: "software", name: tokens[i].toLowerCase(), level: null });
+        if (!lvlOnly && !/^\d+$/.test(tokens[i])) conditions.push({ type: "text", value: tokens[i].toLowerCase() });
         i++;
       }
 
-      if (matchedName) conditions.push({ type: "software", name: matchedName.toLowerCase(), level });
+      if (matchedName) conditions.push({ type: "software", name: matchedName.toLowerCase(), level, spread: 0 });
     }
 
     return conditions;
@@ -879,64 +972,128 @@ function parseSoftwareQuery(query) {
   return groups.length > 0 ? groups : null;
 }
 
-// A record matches if ANY OR group has ALL of its conditions present in the target's software inventory.
-function recordMatchesQuery(record, groups) {
-  const downloads = record.downloads || {};
-  return groups.some((conditions) =>
-    conditions.every((cond) => {
-      if (cond.type === "ip") {
-        return record.ip.toLowerCase().includes(cond.value);
-      }
-      const entry = Object.entries(downloads).find(
-        ([name]) => name.toLowerCase() === cond.name || name.toLowerCase().includes(cond.name)
-      );
-      if (!entry) return false;
-      return cond.level === null || entry[1].level === cond.level;
-    })
+function findDownload(record, name) {
+  return Object.entries(record.downloads || {}).find(
+    ([n]) => n.toLowerCase() === name || n.toLowerCase().includes(name)
   );
+}
+
+function levelInSpread(actual, wanted, spread) {
+  return wanted === null || (actual != null && Math.abs(actual - wanted) <= (spread || 0));
+}
+
+function conditionMatches(record, cond) {
+  switch (cond.type) {
+    case "ip":
+      return record.ip.toLowerCase().includes(cond.value);
+    case "playerLevel":
+      return record.level != null && record.level >= cond.min && record.level <= cond.max;
+    case "anyLoot":
+      return LOOT_APPS.some((app) => record.downloads && record.downloads[app] && record.downloads[app].level === cond.level);
+    case "field": {
+      if (cond.field === "wallet") return (record.wallets || []).some((w) => w.toLowerCase().includes(cond.value));
+      return (record[cond.field] || "").toLowerCase().includes(cond.value);
+    }
+    case "text": {
+      const v = cond.value;
+      return ["username", "clan", "hardware"].some((f) => (record[f] || "").toLowerCase().includes(v)) ||
+        (record.wallets || []).some((w) => w.toLowerCase().includes(v)) ||
+        String(record.level || "") === v ||
+        record.ip.toLowerCase().includes(v) ||
+        !!findDownload(record, v);
+    }
+    case "software": {
+      const entry = findDownload(record, cond.name);
+      // Firewall / Encryptor also come from the Home screen fields when no download is recorded.
+      let level = entry ? entry[1].level : null;
+      if (!entry && cond.name === "firewall") level = record.firewall;
+      if (!entry && cond.name === "password encryptor") level = record.encryptor;
+      if (level == null) return false;
+      return levelInSpread(level, cond.level, cond.spread);
+    }
+    default:
+      return true;
+  }
+}
+
+// A record matches if ANY OR group has ALL of its conditions satisfied.
+function recordMatchesQuery(record, groups) {
+  return groups.some((conditions) => conditions.every((cond) => conditionMatches(record, cond)));
 }
 
 // True if this single software entry satisfies at least one condition in any OR group (card highlighting).
 function entryMatchesFilter(name, data, groups) {
   const n = name.toLowerCase();
   return groups.some((conditions) =>
-    conditions.some(
-      (cond) =>
-        cond.type !== "ip" &&
-        (n === cond.name || n.includes(cond.name)) &&
-        (cond.level === null || data.level === cond.level)
-    )
+    conditions.some((cond) => {
+      if (cond.type === "anyLoot") return LOOT_APPS.includes(name) && data.level === cond.level;
+      if (cond.type === "text") return n.includes(cond.value);
+      if (cond.type !== "software") return false;
+      return (n === cond.name || n.includes(cond.name)) && levelInSpread(data.level, cond.level, cond.spread);
+    })
   );
 }
+
+// --- My Stats (used for odds and Good Spam ranking), persisted per browser ---
+const MY_STATS_KEY = "tic.myStats";
+function loadMyStats() {
+  try { return JSON.parse(localStorage.getItem(MY_STATS_KEY)) || {}; } catch (e) { return {}; }
+}
+function saveMyStats(stats) {
+  try { localStorage.setItem(MY_STATS_KEY, JSON.stringify(stats)); } catch (e) { /* private mode */ }
+}
+let myStats = loadMyStats();
 
 function createCardElement(node) {
   const card = document.createElement("div");
   card.className = "node-card";
   const displayIp = node.ip.startsWith("unknown:") ? "UNKNOWN" : node.ip;
+  const h = escapeHtml;
 
-  const userTag = node.username ? `<span class="user-tag">${node.username}</span>` : "";
+  const userTag = node.username ? `<span class="user-tag">${h(node.username)}</span>` : "";
   const lvlTag = node.level ? `<span class="stat-badge" style="background:#1e3a8a; color:#93c5fd;">Lv.${node.level}</span>` : "";
   const fwBadge = node.firewall ? `<span class="stat-badge badge-fw">🛡️ FW: Lv${node.firewall}</span>` : "";
   const encBadge = node.encryptor ? `<span class="stat-badge badge-enc">🔑 ENC: Lv${node.encryptor}</span>` : "";
-  const hwTag = node.hardware ? `<span class="hardware-tag">(${node.hardware})</span>` : "";
-  const clanBadge = node.clan ? `<span class="stat-badge" style="background:#334155; color:#38bdf8; border: 1px solid #475569;">[${node.clan}]</span>` : "";
+  const hwTag = node.hardware ? `<span class="hardware-tag">(${h(node.hardware)})</span>` : "";
+  const clanBadge = node.clan ? `<span class="stat-badge" style="background:#334155; color:#38bdf8; border: 1px solid #475569;">[${h(node.clan)}]</span>` : "";
 
   const walletList = node.wallets && node.wallets.length > 0
-    ? `<div class="wallet-container">${node.wallets.map((w) => `<span class="wallet-tag">Wallet: ${w}</span>`).join("")}</div>`
+    ? `<div class="wallet-container">${node.wallets.map((w) => {
+        const est = Estimator.formatIncome(Estimator.estimateIncome((node.thefts || {})[w]));
+        return `<span class="wallet-tag">Wallet: ${h(w)}${est ? ` <b class="income">${est}</b>` : ""}</span>`;
+      }).join("")}</div>`
     : "";
+
+  // Intel strip: hack odds, Good Spam plan, missing scrape data.
+  const theirFw = node.firewall ?? (node.downloads?.Firewall?.level ?? null);
+  const theirEnc = node.encryptor ?? (node.downloads?.["Password Encryptor"]?.level ?? null);
+  const intel = [];
+  const bp = Estimator.hackOdds(myStats.bypasser || null, theirFw);
+  const pc = Estimator.hackOdds(myStats.cracker || null, theirEnc);
+  if (bp !== null) intel.push(`<span class="intel-chip" title="Your Bypasser ${myStats.bypasser} vs Firewall ${theirFw}">🚪 Bypass ${bp}%</span>`);
+  if (pc !== null) intel.push(`<span class="intel-chip" title="Your Cracker ${myStats.cracker} vs Encryptor ${theirEnc}">🔨 Crack ${pc}%</span>`);
+  if (node.level) {
+    const plan = Estimator.spamPlan(node.level, myStats.spam || 0);
+    intel.push(`<span class="intel-chip" title="${plan.capReachable ? "Cheapest Spam that hits the ₵100/hr cap" : "Cap not reachable; best-earning level"}">📧 Spam Lv${plan.uploadLevel} → ₵${plan.income}/hr</span>`);
+  }
+  if (Estimator.needsAdvancedTargeting(node)) {
+    intel.push(`<span class="intel-chip intel-missing" title="Advanced targeting: data still to scrape">⚠ Missing: ${Estimator.advancedTargetingMissing(node).map(h).join(", ")}</span>`);
+  }
+  const intelRow = intel.length ? `<div class="intel-row">${intel.join("")}</div>` : "";
 
   const downEntries = Object.entries(node.downloads || {});
   const activeGroups = parseSoftwareQuery(document.getElementById("softwareFilterInput").value);
   const downTags = downEntries.length > 0
     ? downEntries.map(([name, data]) => `
-        <div class="sw-card sw-loot${activeGroups && entryMatchesFilter(name, data, activeGroups) ? " sw-match" : ""}" data-sw-name="${name.toLowerCase()}" data-sw-level="${data.level}">
-          <span>${getSoftwareIcon(name)} ${name}</span>
+        <div class="sw-card sw-loot${activeGroups && entryMatchesFilter(name, data, activeGroups) ? " sw-match" : ""}" data-sw-name="${h(name.toLowerCase())}" data-sw-level="${data.level}">
+          <span>${getSoftwareIcon(name)} ${h(name)}</span>
           <strong>Lv${data.level}</strong>
         </div>
       `).join("")
     : "<span style='color:#475569; font-size:12px; font-style: italic;'>No target inventory known</span>";
 
   card.innerHTML = `
+    <div class="node-header">
     <div class="node-meta">
         <span class="ip-title">${displayIp}</span>
         ${clanBadge}
@@ -955,6 +1112,7 @@ function createCardElement(node) {
     </div>
 
     <div class="node-body">
+      ${intelRow}
       ${walletList}
       <div class="software-section-label">Target Software</div>
       <div class="software-grid">${downTags}</div>
@@ -1012,18 +1170,38 @@ function renderFromDB() {
     const partialIps = [];
     let matchCount = 0;
 
+    const advanced = document.getElementById("advancedToggle").checked;
     records.forEach((rec) => {
       if (activeGroups && !recordMatchesQuery(rec, activeGroups)) return;
+      if (advanced && !Estimator.needsAdvancedTargeting(rec)) return;
       matchCount++;
       if (rec.ip.includes("xxx")) partialIps.push(rec);
       else fullIps.push(rec);
     });
 
-    fullIps.sort((a, b) => compareIps(a.ip, b.ip));
-    partialIps.sort((a, b) => compareIps(a.ip, b.ip));
+    const sortMode = document.getElementById("sortSelect").value;
+    const sortList = (list) => {
+      if (sortMode === "spam") {
+        return Estimator.rankForSpam(list, myStats.spam || 0).map((x) => x.record);
+      }
+      if (sortMode === "income") {
+        const val = (r) => { const e = recordIncome(r); return e ? (e.perHour ?? -1) : -2; };
+        return list.slice().sort((a, b) => val(b) - val(a) || compareIps(a.ip, b.ip));
+      }
+      return list.slice().sort((a, b) => compareIps(a.ip, b.ip));
+    };
+    const sortedFull = sortList(fullIps);
+    const sortedPartial = sortList(partialIps);
+    fullIps.length = 0; fullIps.push(...sortedFull);
+    partialIps.length = 0; partialIps.push(...sortedPartial);
 
-    if (activeGroups && matchCount === 0) {
-      const noMatchMsg = "<p style='color:#fbbf24; font-size:13px;'>No targets match your software filter.</p>";
+    document.getElementById("resultCount").textContent =
+      (activeGroups || advanced) ? `${matchCount} of ${records.length} targets` : `${records.length} targets`;
+
+    if ((activeGroups || advanced) && matchCount === 0) {
+      const noMatchMsg = advanced && !activeGroups
+        ? "<p style='color:#4ade80; font-size:13px;'>Every full target has a wallet, Bypasser, Firewall and Encryptor recorded.</p>"
+        : "<p style='color:#fbbf24; font-size:13px;'>No targets match your filter.</p>";
       fullContainer.innerHTML = noMatchMsg;
       partialContainer.innerHTML = noMatchMsg;
       return;
@@ -1043,6 +1221,30 @@ document.getElementById("clearFilterBtn").addEventListener("click", () => {
   document.getElementById("softwareFilterInput").value = "";
   renderFromDB();
 });
+
+document.getElementById("advancedToggle").addEventListener("change", () => renderFromDB());
+document.getElementById("sortSelect").addEventListener("change", () => renderFromDB());
+
+// My Stats panel
+(function initMyStats() {
+  const panel = document.getElementById("statsPanel");
+  const btn = document.getElementById("statsToggleBtn");
+  const fields = ["bypasser", "cracker", "spam"];
+  fields.forEach((f) => {
+    const input = document.getElementById(`my-${f}`);
+    input.value = myStats[f] || "";
+    input.addEventListener("input", () => {
+      const n = parseInt(input.value, 10);
+      myStats[f] = Number.isFinite(n) && n > 0 ? n : null;
+      saveMyStats(myStats);
+      renderFromDB();
+    });
+  });
+  btn.addEventListener("click", () => {
+    panel.hidden = !panel.hidden;
+    btn.setAttribute("aria-expanded", String(!panel.hidden));
+  });
+})();
 
 document.getElementById("partialToggleBtn").addEventListener("click", () => {
   const partialContainer = document.getElementById("partialIpContainer");
@@ -1180,124 +1382,11 @@ document.getElementById("clearBtn").addEventListener("click", () => {
   tx.oncomplete = () => renderFromDB();
 });
 
-// --- Export and Import Functions ---
-function exportLogHistory() {
-    // Create a formatted string with all log entries
-    let exportData = "";
-    
-    // Add header information if needed
-    exportData += "// Log History Export\n";
-    exportData += `// Generated on: ${new Date().toISOString()}\n`;
-    exportData += `// Total entries: ${logHistory.length}\n\n`;
-    
-    // Add all log entries
-    for (const entry of logHistory) {
-        exportData += `${entry}\n`;
-    }
-    
-    return exportData;
-}
-
-function importLogHistory(data) {
-    const lines = data.split('\n');
-    let importedCount = 0;
-    
-    for (const line of lines) {
-        if (!line.trim()) continue;
-        
-        // Skip header comments
-        if (line.startsWith('//')) continue;
-        
-        // Add to log history - only valid entries that match our format
-        if (line.match(/^[\[][0-9]{1,2}-[0-9]{1,2}\s+[0-9]{1,2}:[0-9]{2}/)) {
-            logHistory.push(line);
-            importedCount++;
-        }
-    }
-    
-    return importedCount;
-}
-
-// Add export button to UI
-function addExportImportButtons() {
-    const container = document.getElementById('buttonContainer');
-    if (!container) return;
-    
-    // Create and append export button
-    const exportBtn = document.createElement('button');
-    exportBtn.id = 'exportBtn';
-    exportBtn.textContent = 'Export Logs';
-    exportBtn.style.cssText = `
-        background: #10b981; 
-        color: white; 
-        border: none; 
-        padding: 8px 12px; 
-        margin-right: 5px;
-        border-radius: 4px;
-        cursor: pointer;
-    `;
-    
-    exportBtn.addEventListener('click', () => {
-        const data = exportLogHistory();
-        const blob = new Blob([data], { type: 'text/plain' });
-        const url = URL.createObjectURL(blob);
-        
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = `log_history_${new Date().toISOString().slice(0, 10)}.txt`;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        URL.revokeObjectURL(url);
-    });
-    
-    // Create and append import button
-    const importBtn = document.createElement('button');
-    importBtn.id = 'importBtn';
-    importBtn.textContent = 'Import Logs';
-    importBtn.style.cssText = `
-        background: #3b82f6; 
-        color: white; 
-        border: none; 
-        padding: 8px 12px; 
-        margin-right: 5px;
-        border-radius: 4px;
-        cursor: pointer;
-    `;
-    
-    importBtn.addEventListener('click', async () => {
-        const input = document.createElement('input');
-        input.type = 'file';
-        input.accept = '.txt';
-        
-        input.onchange = async (e) => {
-            const file = e.target.files[0];
-            if (!file) return;
-            
-            try {
-                const text = await file.text();
-                const count = importLogHistory(text);
-                alert(`Successfully imported ${count} log entries`);
-                
-                // Optionally refresh the UI or database
-                renderFromDB();
-            } catch (error) {
-                console.error('Import error:', error);
-                alert('Failed to import logs: ' + error.message);
-            }
-        };
-        
-        input.click();
-    });
-    
-    container.appendChild(exportBtn);
-    container.appendChild(importBtn);
-}
-
+// --- Export and Import ---
 async function exportDataBundle() {
   const bundle = {
     format: "target-intelligence-console",
-    version: 1,
+    version: 2,
     exportedAt: new Date().toISOString(),
     targets: await getAllRecords(STORE_NAME),
     ingests: await getAllRecords(ARCHIVE_STORE_NAME)
@@ -1316,7 +1405,7 @@ async function exportDataBundle() {
 
 async function importDataBundle(file) {
   const bundle = JSON.parse(await file.text());
-  if (!bundle || bundle.format !== "target-intelligence-console" || bundle.version !== 1) {
+  if (!bundle || bundle.format !== "target-intelligence-console" || ![1, 2].includes(bundle.version)) {
     throw new Error("This is not a Target Intelligence Console export.");
   }
 
@@ -1390,4 +1479,4 @@ function addArchiveButtons() {
   headerActions.prepend(exportButton);
 }
 
-window.addEventListener("load", addArchiveButtons);
+addArchiveButtons();

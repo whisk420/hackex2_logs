@@ -268,6 +268,73 @@
       box-shadow: 0 0 8px rgba(251, 191, 36, 0.35);
     }
 
+    .header-actions button { padding: 6px 10px; font-size: 12px; }
+
+    /* Intel strip on cards */
+    .intel-row { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+    .intel-chip {
+      font-size: 11px; font-family: monospace; padding: 3px 7px; border-radius: 4px;
+      background: #0f172a; border: 1px solid #334155; color: #cbd5e1;
+    }
+    .intel-missing { border-color: #92400e; color: #fbbf24; background: #1c1306; }
+    .wallet-tag .income { color: #4ade80; margin-left: 6px; }
+
+    /* Toolbar under the filter */
+    .toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin: 6px 0 4px; font-size: 13px; color: #94a3b8; }
+    .toolbar label { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
+    .toolbar select, .panel input, .panel select {
+      background: #050811; color: #e2e8f0; border: 1px solid #1e293b; border-radius: 6px;
+      padding: 6px 8px; font-size: 14px;
+    }
+    .toolbar input[type=checkbox] { width: 18px; height: 18px; accent-color: #2563eb; }
+    #resultCount { margin-left: auto; font-family: monospace; font-size: 12px; }
+
+    /* Generic panel (My Stats, Knowledge Base) */
+    .panel {
+      background: #0e1628; border: 1px solid #1e293b; border-radius: 8px;
+      padding: 12px; margin: 10px 0 16px;
+    }
+    .panel h3 { margin: 0 0 8px; font-size: 14px; display: flex; align-items: center; gap: 8px; }
+    .panel .hint { font-size: 12px; color: #64748b; margin: 4px 0 0; }
+    .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; }
+    .stats-grid label, .kb-calc-fields label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: #94a3b8; }
+    .panel input[type=number] { width: 100%; box-sizing: border-box; font-size: 16px; }
+
+    /* Knowledge Base */
+    .kb-head { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+    .kb-head h3 { margin: 0; }
+    .kb-head .close-btn { margin-left: auto; padding: 4px 10px; background: #1e293b; }
+    #kbSearch { width: 100%; box-sizing: border-box; font-size: 16px; padding: 8px 10px; margin-bottom: 10px; }
+    .kb-section-label { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: #64748b; font-weight: 700; margin: 12px 0 6px; }
+    .kb-legend { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+    details.kb-topic, details.kb-calc {
+      border: 1px solid #1e293b; border-radius: 6px; margin-bottom: 6px; background: #0b1120;
+    }
+    details.kb-topic > summary, details.kb-calc > summary {
+      cursor: pointer; padding: 10px 12px; font-weight: 600; font-size: 14px; list-style: none;
+    }
+    details > summary::-webkit-details-marker { display: none; }
+    details > summary::before { content: "▸ "; color: #64748b; }
+    details[open] > summary::before { content: "▾ "; }
+    .kb-item { padding: 6px 12px 10px; border-top: 1px solid #131d31; font-size: 13px; line-height: 1.45; }
+    .kb-item p { margin: 6px 0 0; }
+    .kb-item ul { margin: 6px 0 0; padding-left: 18px; }
+    .kb-src {
+      display: inline-block; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em;
+      border: 1px solid; border-radius: 3px; padding: 1px 5px; cursor: help;
+    }
+    .kb-table-wrap { overflow-x: auto; margin-top: 6px; }
+    .kb-table { border-collapse: collapse; font-family: monospace; font-size: 12px; min-width: 60%; }
+    .kb-table th, .kb-table td { border: 1px solid #1e293b; padding: 4px 8px; text-align: left; white-space: nowrap; }
+    .kb-table th { background: #131d31; color: #94a3b8; }
+    .kb-calc-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 8px; padding: 0 12px; }
+    .kb-calc-fields .kb-check { flex-direction: row; align-items: center; gap: 6px; padding-top: 18px; }
+    .kb-calc-out {
+      margin: 10px 12px 12px; padding: 8px 10px; background: #050811; border-left: 3px solid #38bdf8;
+      font-family: monospace; font-size: 13px; color: #e2e8f0; line-height: 1.6;
+    }
+    .kb-empty { color: #64748b; font-size: 13px; }
+
     /* Mobile-Specific Adaptations */
     @media (max-width: 600px) {
       body {
@@ -304,10 +371,41 @@
 
   <div class="header">
     <h2 style="margin: 0; font-size: 18px;">Target Intelligence Console</h2>
-    <div class="header-actions">
+    <div class="header-actions" style="flex-wrap: wrap;">
+      <button id="kbToggleBtn" class="alt-btn" aria-expanded="false" aria-controls="kbPanel">📖 Knowledge Base</button>
+      <button id="statsToggleBtn" class="alt-btn" aria-expanded="false" aria-controls="statsPanel">⚙ My Stats</button>
       <button id="clearBtn" class="danger" style="padding: 6px 10px; font-size: 12px;">Wipe DB</button>
     </div>
   </div>
+
+  <section id="statsPanel" class="panel" hidden>
+    <h3>⚙ My Stats</h3>
+    <div class="stats-grid">
+      <label>Your Bypasser level<input type="number" id="my-bypasser" min="1" inputmode="numeric"></label>
+      <label>Your Password Cracker level<input type="number" id="my-cracker" min="1" inputmode="numeric"></label>
+      <label>Your Spam level<input type="number" id="my-spam" min="1" inputmode="numeric"></label>
+    </div>
+    <p class="hint">Used for bypass/crack odds and Good Spam ranking on each card. Saved in this browser only.</p>
+  </section>
+
+  <section id="kbPanel" class="panel" hidden>
+    <div class="kb-head">
+      <h3>📖 Knowledge Base</h3>
+      <button id="kbCloseBtn" class="close-btn" aria-label="Close knowledge base">✕</button>
+    </div>
+    <div class="kb-section-label">Calculators</div>
+    <div id="kbCalcs"></div>
+    <div class="kb-section-label">Reference</div>
+    <div class="kb-legend">
+      <span class="kb-src" style="color:#22c55e;border-color:#22c55e">Measured</span>
+      <span class="kb-src" style="color:#38bdf8;border-color:#38bdf8">Calculated</span>
+      <span class="kb-src" style="color:#a3e635;border-color:#a3e635">Confirmed</span>
+      <span class="kb-src" style="color:#fbbf24;border-color:#fbbf24">Guide</span>
+      <span class="kb-src" style="color:#fb923c;border-color:#fb923c">Empirical</span>
+    </div>
+    <input type="search" id="kbSearch" class="kb-search" placeholder="Search the knowledge base… (spam, odds, proxy)" autocomplete="off">
+    <div id="kbTopics"></div>
+  </section>
 
   <textarea id="dataInput" placeholder="Paste data here (Logs, Home Screen, or Software Screen)..."></textarea>
   
@@ -317,8 +415,20 @@
   </div>
 
   <div class="filter-bar">
-    <input type="text" id="softwareFilterInput" placeholder='Filter software or IP — e.g. Firewall Lv.10 27.61.93.149 (space = AND, | = OR)' autocomplete="off">
+    <input type="text" id="softwareFilterInput" placeholder='Filter — Firewall Lv.10 · lvl 30 · sw 20 · fw 12 · user:Name (space = AND, | = OR)' autocomplete="off">
     <button id="clearFilterBtn" class="alt-btn" style="padding: 10px 14px; font-size: 13px;">Clear</button>
+  </div>
+
+  <div class="toolbar">
+    <label title="Only real targets missing a wallet, Bypasser, Firewall or Password Encryptor"><input type="checkbox" id="advancedToggle"> Advanced targeting</label>
+    <label>Sort
+      <select id="sortSelect">
+        <option value="ip">IP</option>
+        <option value="spam">Good Spam (₵/hr)</option>
+        <option value="income">Wallet income</option>
+      </select>
+    </label>
+    <span id="resultCount"></span>
   </div>
 
   <div class="section-title" style="color: #60a5fa;">Full Targets</div>
@@ -334,6 +444,8 @@
     <button id="scrollBottomBtn" title="Scroll to bottom" aria-label="Scroll to bottom">↓</button>
   </div>
 
+  <script src="estimator.js"></script>
+  <script src="kb.js"></script>
   <script src="app.js"></script>
 </body>
 </html>
