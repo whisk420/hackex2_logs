@@ -235,8 +235,11 @@ function parseVictimLogs(rawLines) {
 
         const walletMatch = line.match(/(Stole\s+(\d[\d,]*)\s+Crypto\s+from|\d[\d,]*\s+Crypto\s+transferred\s+to)\s+(hx[a-zA-Z0-9.]+)/i);
         if (walletMatch) {
+          // Same rule as DarkIndex: a steal belongs to the last access if it's within 3 minutes either way
+          // (log lines aren't strictly in time order), and only the first steal after an access is linked.
+          // The game sometimes skips an "accessed" line, so a second steal in a row stays unlinked.
           const withinCorrelationWindow = lastAccess && eventMinute !== null && lastAccess.eventMinute !== null &&
-            eventMinute >= lastAccess.eventMinute && eventMinute - lastAccess.eventMinute <= 2;
+            Math.abs(eventMinute - lastAccess.eventMinute) <= 3;
           if (withinCorrelationWindow) {
             const update = { ip: lastAccess.ip, time, wallet: walletMatch[3], raw: line };
             // Theft amount + time feed the passive wallet income estimator.
@@ -245,6 +248,7 @@ function parseVictimLogs(rawLines) {
             }
             updates.push(update);
           }
+          lastAccess = null;
           continue;
         }
         
@@ -980,6 +984,10 @@ function saveMyStats(stats) {
   try { localStorage.setItem(MY_STATS_KEY, JSON.stringify(stats)); } catch (e) { /* private mode */ }
 }
 let myStats = loadMyStats();
+// Your network's speed (My Stats); DSL (1.0×) if unset. Reboot networks match the standard one at the same level.
+function myNetworkBoost() {
+  return Estimator.NETWORK_BOOST[(myStats.network || 1) - 1] || 1;
+}
 
 function createCardElement(node) {
   const card = document.createElement("article");
@@ -1007,7 +1015,8 @@ function createCardElement(node) {
   if (pc !== null) intel.push(`<span class="intel-chip ${oddsColor(pc)}" title="Your Cracker ${myStats.cracker} vs Encryptor ${theirEnc}">🔨 Crack ${pc}%</span>`);
   if (node.level) {
     const plan = Estimator.spamPlan(node.level, myStats.spam || 0);
-    intel.push(`<span class="intel-chip" title="${plan.capReachable ? "Cheapest Spam that hits the ₵100/hr cap" : "Cap not reachable; best-earning level"}">📧 Spam Lv${plan.uploadLevel} → ₵${plan.income}/hr</span>`);
+    const up = Estimator.spamUploadSeconds(node, plan, myNetworkBoost());
+    intel.push(`<span class="intel-chip" title="${plan.capReachable ? "Cheapest Spam that hits the ₵100/hr cap" : "Cap not reachable; best-earning level"}${up != null ? ". Upload time on your network" : ""}">📧 Spam Lv${plan.uploadLevel} → ₵${plan.income}/hr${up != null ? ` · ⏱ ${Estimator.formatDuration(up)}` : ""}</span>`);
   }
   if (Estimator.needsAdvancedTargeting(node)) {
     intel.push(`<span class="intel-chip intel-missing" title="Advanced targeting: data still to scrape">⚠ Missing: ${Estimator.advancedTargetingMissing(node).map(h).join(", ")}</span>`);
@@ -1159,7 +1168,7 @@ function renderFromDB() {
     const sortMode = document.getElementById("sortSelect").value;
     const sortList = (list) => {
       if (sortMode === "spam") {
-        return Estimator.rankForSpam(list, myStats.spam || 0).map((x) => x.record);
+        return Estimator.rankForSpam(list, myStats.spam || 0, myNetworkBoost()).map((x) => x.record);
       }
       if (sortMode === "income") {
         const val = (r) => { const e = recordIncome(r); return e ? (e.perHour ?? -1) : -2; };
@@ -1242,6 +1251,15 @@ document.querySelectorAll(".chip-btn").forEach((chip) => chip.addEventListener("
       saveMyStats(myStats);
       renderFromDB();
     });
+  });
+  const net = document.getElementById("my-network");
+  net.innerHTML = Estimator.NETWORKS.map((n, i) =>
+    `<option value="${i + 1}">${n} (${Estimator.NETWORK_BOOST[i]}×)</option>`).join("");
+  net.value = String(myStats.network || 1);
+  net.addEventListener("change", () => {
+    myStats.network = parseInt(net.value, 10) || 1;
+    saveMyStats(myStats);
+    renderFromDB();
   });
   btn.addEventListener("click", () => {
     panel.hidden = !panel.hidden;
