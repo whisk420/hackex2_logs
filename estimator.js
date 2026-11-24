@@ -63,14 +63,26 @@
     const uploadLevel = spamBestLevel(victimLevel, top);
     return { uploadLevel, income: spamIncome(uploadLevel, victimLevel), capReachable: minCap != null, recommended };
   }
-  // records -> [{record, plan}] ranked: income desc (unknown last), then lowest firewall.
-  function rankForSpam(records, installed) {
+  // Seconds to upload this target's Spam plan with your network, or null if their device is unknown.
+  function spamUploadSeconds(record, plan, networkBoost) {
+    const tier = uploadTier(record.hardware);
+    return tier == null ? null : uploadSecondsForLevel(tier, networkBoost || 1, plan.uploadLevel);
+  }
+  // records -> [{record, plan, uploadSeconds}] ranked like DarkIndex: income (highest first, unknown last),
+  // then fastest upload (unknown device last), then lowest Firewall.
+  function rankForSpam(records, installed, networkBoost) {
     return records
-      .map((record) => ({ record, plan: spamPlan(record.level, installed) }))
+      .map((record) => {
+        const plan = spamPlan(record.level, installed);
+        return { record, plan, uploadSeconds: spamUploadSeconds(record, plan, networkBoost) };
+      })
       .sort((a, b) => {
         const ai = a.plan.income == null ? -1 : a.plan.income;
         const bi = b.plan.income == null ? -1 : b.plan.income;
         if (bi !== ai) return bi - ai;
+        const au = a.uploadSeconds == null ? Infinity : a.uploadSeconds;
+        const bu = b.uploadSeconds == null ? Infinity : b.uploadSeconds;
+        if (au !== bu) return au - bu;
         return (a.record.firewall || 0) - (b.record.firewall || 0);
       });
   }
@@ -190,6 +202,42 @@
   // Upload difficulty tier 0–9: Raider I–III are all tier 0, then one tier per device level.
   function uploadTierForDeviceIndex(i) { return Math.max(0, i - 2); }
 
+  // Reboot (prestige) hardware: "<Line> <Roman numeral>", same speed as the standard item at that level.
+  // A bare line name ("Vector") counts as I. (DarkIndex HardwareCatalog)
+  const REBOOT_DEVICES = ["Ghost", "Vector", "Scythe", "Cipher", "Apex"];
+  const REBOOT_NETWORKS = ["Ghost Link", "Contra Band", "Harvest Node", "Void Net", "Null Route"];
+  const ROMAN = ["I", "II", "III", "IV", "V", "VI", "VII", "VIII", "IX", "X", "XI", "XII"];
+
+  // Level (1-based) of a device or network name, or null if unknown.
+  function hardwareLevel(name, standard, lines) {
+    const n = String(name || "").trim().replace(/\s+/g, " ").toLowerCase();
+    if (!n) return null;
+    const std = standard.findIndex((x) => x.toLowerCase() === n || (x === "4G LTE" && n === "4g"));
+    if (std >= 0) return std + 1;
+    for (const line of lines) {
+      const l = line.toLowerCase();
+      if (n === l) return 1;
+      if (n.startsWith(l + " ")) {
+        const lvl = ROMAN.indexOf(n.slice(l.length + 1).trim().toUpperCase()) + 1;
+        if (lvl >= 1 && lvl <= standard.length) return lvl;
+      }
+    }
+    return null;
+  }
+  // A target's hardware is stored as "<Device> • <Network>" (or just one of them).
+  function deviceLevel(hardware) {
+    return hardwareLevel(String(hardware || "").split("•")[0], DEVICES, REBOOT_DEVICES);
+  }
+  function networkLevel(name) {
+    const s = String(name || "");
+    return hardwareLevel(s.includes("•") ? s.split("•")[1] : s, NETWORKS, REBOOT_NETWORKS);
+  }
+  // Upload tier 0–9 for a target's hardware string, or null if the device is unknown.
+  function uploadTier(hardware) {
+    const lvl = deviceLevel(hardware);
+    return lvl == null ? null : uploadTierForDeviceIndex(lvl - 1);
+  }
+
   // ---------- Reputation & score ----------
   function score(level, rep) { return Math.floor(level * Math.pow(Math.max(0, rep), 0.75)); }
   function repLossFromVirus(virusLevel) { return Math.min(500, 25 * virusLevel); }
@@ -197,6 +245,7 @@
 
   const api = {
     DEVICES, DEVICE_SPEED, DEVICE_PRICES, NETWORKS, NETWORK_BOOST, NETWORK_PRICES, uploadTierForDeviceIndex,
+    REBOOT_DEVICES, REBOOT_NETWORKS, hardwareLevel, deviceLevel, networkLevel, uploadTier, spamUploadSeconds,
     score, repLossFromVirus, hardeningBlock,
     hackOdds, SPAM_CAP_PER_HOUR, spamMaxIncome, spamGapMultiplier, spamIncome, spamDecayFactor,
     spamBestLevel, spamCapLevel, spamPlan, rankForSpam,

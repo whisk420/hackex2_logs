@@ -40,12 +40,13 @@
         <h2 class="panel-title">My Stats</h2>
         <span class="font-mono text-[10px] text-slate-600">Saved in this browser only</span>
       </div>
-      <div class="grid grid-cols-1 gap-3 sm:grid-cols-3">
+      <div class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <label class="field-label">Your Bypasser level<input type="number" id="my-bypasser" min="1" inputmode="numeric" class="input" placeholder="e.g. 14"></label>
         <label class="field-label">Your Password Cracker level<input type="number" id="my-cracker" min="1" inputmode="numeric" class="input" placeholder="e.g. 12"></label>
         <label class="field-label">Your Spam level<input type="number" id="my-spam" min="1" inputmode="numeric" class="input" placeholder="e.g. 17"></label>
+        <label class="field-label">Your network<select id="my-network" class="input"></select></label>
       </div>
-      <p class="mt-3 text-xs text-slate-500">Used for bypass / crack odds and the Good Spam plan on each target card.</p>
+      <p class="mt-3 text-xs text-slate-500">Used for bypass / crack odds, the Good Spam plan and upload times on each target card. On a reboot network, pick the standard one at the same level (Null Route IX = 10G Fiber).</p>
     </section>
 
     <!-- Stats bar -->
