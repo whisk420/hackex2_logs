@@ -180,7 +180,24 @@
     return defensive ? Math.ceil(raw) : Math.round(raw);
   }
 
+  // ---------- Hardware (DarkIndex HardwareCatalog / GameFormulas) ----------
+  const DEVICES = ["Raider", "Raider II", "Raider III", "Bolt", "Bolt II", "Bolt III", "Nova", "Nova II", "Nova III", "Nova S", "Nova X", "Nova Ultra"];
+  const DEVICE_SPEED = [1.0, 1.5, 2.25, 3.5, 5.0, 7.0, 9.0, 11.0, 14.0, 17.0, 20.0, 23.0];
+  const DEVICE_PRICES = [0, 4000, 10000, 18000, 28000, 40000, 56000, 82000, 120000, 160000, 220000, 300000];
+  const NETWORKS = ["DSL", "Cable", "Cable+", "4G LTE", "5G", "5G+", "Fiber", "Fiber+", "10G Fiber", "10G Fiber+", "Quantum Link"];
+  const NETWORK_BOOST = [1.0, 1.5, 2.25, 3.5, 5.0, 7.0, 9.5, 12.0, 15.0, 18.0, 21.0];
+  const NETWORK_PRICES = [0, 3000, 7000, 12000, 20000, 30000, 44000, 60000, 85000, 120000, 170000];
+  // Upload difficulty tier 0–9: Raider I–III are all tier 0, then one tier per device level.
+  function uploadTierForDeviceIndex(i) { return Math.max(0, i - 2); }
+
+  // ---------- Reputation & score ----------
+  function score(level, rep) { return Math.floor(level * Math.pow(Math.max(0, rep), 0.75)); }
+  function repLossFromVirus(virusLevel) { return Math.min(500, 25 * virusLevel); }
+  function hardeningBlock(level) { return Math.max(0, Math.min(90, 3 * (level - 2))); }
+
   const api = {
+    DEVICES, DEVICE_SPEED, DEVICE_PRICES, NETWORKS, NETWORK_BOOST, NETWORK_PRICES, uploadTierForDeviceIndex,
+    score, repLossFromVirus, hardeningBlock,
     hackOdds, SPAM_CAP_PER_HOUR, spamMaxIncome, spamGapMultiplier, spamIncome, spamDecayFactor,
     spamBestLevel, spamCapLevel, spamPlan, rankForSpam,
     UPLOAD_BASE_SECONDS, uploadSecondsLv20, uploadSecondsForLevel, formatDuration,
