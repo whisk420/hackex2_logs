@@ -22,6 +22,7 @@
     Firewall: [800, 1], Bypasser: [800, 0], "Password Cracker": [1100, 0], "Password Encryptor": [1100, 1], Antivirus: [1000, 1],
     Spam: [1800, 0], Siphon: [1600, 0], Rootkit: [1400, 0], Proxy: [900, 1], Trace: [900, 1], Keygen: [600, 0]
   };
+const SHOT = (name, alt, caption) => ({ src: `docs/kb/${name}.webp`, alt, caption });
   const rootkitDebuff = (lvl) => (lvl >= 6 ? 3 : lvl >= 3 ? 2 : lvl >= 1 ? 1 : 0);
   const keyFee = (jump) => Math.min(0.5, 0.15 + (jump - 1) * 0.35 / 19);
 
@@ -123,6 +124,7 @@
             "You can upload any level up to the one you have installed. Lower levels upload faster.",
             "An uploaded virus stays at the level you uploaded; uninstall and re-upload to upgrade it."
           ], source: "confirmed" },
+        { shots: [SHOT("apps", "A target's Apps screen", "A target's Apps page. UPLOAD VIRUS shows how many of your 2 slots you've used there; the small number under each level compares it with yours (+6 = 6 above you).")] },
         { text: "Each virus on a device slows that device by 1%, up to 40%. It affects bypasses, cracks, transfers and even its own Antivirus scans.", source: "guide" },
         { text: "Viruses also cost the victim reputation when they land; see Reputation & score.", source: "guide" },
         { warn: "The only way to see which viruses are on you is an Antivirus scan. Its report lists every virus it found, removed or not." }
@@ -203,6 +205,7 @@
     },
     {
       id: "logs", title: "📜 Logs", items: [
+        { shots: [SHOT("log", "Your log screen", "Your log. The xxx lines are a target with Proxy on; the box is editable, hence SAVE. Real IPs blurred.")] },
         { list: [
             "Logs keep only the last 100 lines, graffiti and messages included. Paste them here often or steals fall off the end.",
             "Times are UTC, written as [M-D H:MM], newest first.",
@@ -229,9 +232,10 @@
             "Unlock it with your Keygen for a fee: much cheaper than the Store, and you still get the full XP for that level plus 5 rep.",
             "You can only unlock levels above what you already have. Keygen itself can't be downloaded; buy it in the Store."
           ], source: "guide" },
+        { shots: [SHOT("locked", "Your Apps page with locked downloads", "Your Apps page: each LOCKED row is a downloaded level waiting to be unlocked, with its key price.")] },
         { table: { head: ["Levels jumped", "Fee (share of Store price)"], rows: [1, 2, 3, 5, 10, 15, 20].map((j) => ["+" + j + (j === 20 ? " or more" : ""), (keyFee(j) * 100).toFixed(0) + "%"]),
-                   caption: "Exact in-between steps unconfirmed." },
-          source: "guide" },
+                   caption: "Matches 6 real key prices to within 1% (jumps of 2–13, Lv 33–42). The jump counts from the level shown on your Apps page, including any (+3) bonus." },
+          source: "measured" },
         { tip: "One big jump beats several small ones: each step pays a fee on its own level's price. Find the highest copy you can and unlock it directly." },
         { table: { head: ["App", "Lv 15", "Lv 20", "Lv 25", "Lv 30"],
                    rows: Object.entries(STORE_APPS).map(([app, [base, def]]) => [app, ...[15, 20, 25, 30].map((l) => fmt(E.storePrice(base, l, !!def)))]),
@@ -255,15 +259,16 @@
             "Cold storage: safe from theft and Siphons, but capped by your level.",
             "Theft loses 10% to gas: the victim loses the full amount, the thief gets 90%. 'Stole N' in your log is what the victim lost."
           ], source: "guide" },
-        { table: { head: ["Level", "Cold storage cap"], rows: [[1, "3,000"], [5, "8,841"], [10, "29,124"], [20, "121,891"], [30, "294,147+"]],
-                   caption: "Mission, streak, ad and Crypto Stash rewards go to cold storage even past the cap." },
+        { shots: [SHOT("wallet", "A target's wallet screen", "A Lv 36 target's wallet: nothing in the hot wallet to steal, and a 439,280 cold storage cap. Name and address blurred.")] },
+        { table: { head: ["Level", "Cold storage cap"], rows: [[1, "3,000"], [5, "8,841"], [10, "29,124"], [20, "121,891"], [30, "294,147"], [36, "439,280"]],
+                   caption: "Lv 36 confirmed in-game; the rest from the guide. Mission, streak, ad and Crypto Stash rewards go to cold storage even past the cap." },
           source: "guide" },
         { text: "Crypto → Credits: 250 crypto buys 1 Credit. Minimum 5 Credits per exchange, at most 750 Credits a month (resets on the 1st, UTC). It takes from your hot wallet first, then cold storage.", source: "guide" },
         { text: "Credits → Crypto: the Black Market's Crypto Stash sells 10,000 crypto for 100 Credits and 40,000 for 400 Credits, each once a day. It goes straight to cold storage, so it can't be stolen or siphoned on the way.", source: "guide" },
         { tip: "Move crypto to cold storage right after every steal: tap the Wallet badge at the top of any page." },
         { text: "XP only comes from spending crypto (software, Keygen unlocks, hardware), missions and login streaks. Hacking itself gives no XP.", source: "confirmed" },
-        { table: { head: ["Level", "XP to next level"], rows: [[1, "589"], [5, "2,605"], [10, "5,919"], [20, "14,209"], [30, "24,079"], [35, "29,484"], [38, "32,860"], [44, "39,888"]],
-                   caption: "Lv 35, 38 and 44 confirmed in-game." },
+        { table: { head: ["Level", "XP to next level"], rows: [[1, "589"], [5, "2,605"], [10, "5,919"], [20, "14,209"], [30, "24,079"], [35, "29,484"], [36, "30,599"], [38, "32,860"], [44, "39,888"]],
+                   caption: "Lv 35, 36, 38 and 44 confirmed in-game." },
           source: "guide" },
         { text: "Software (Store or Keygen) gives about 0.17 XP per crypto of its Store price; devices give 0.25 XP per crypto.", source: "measured" },
         { text: "Each level gives +10 Overclocks, +10 Credits and a bigger cold storage cap.", source: "guide" },
@@ -273,6 +278,7 @@
     {
       id: "reputation", title: "⭐ Reputation & score", items: [
         { text: "Your leaderboard score grows with both level and reputation. Doubling your level doubles your score; doubling your rep raises it by about 68%. The Score calculator works it out.", source: "measured" },
+        { shots: [SHOT("home", "A target's Home screen", "Lv 36 with 25 rep shows score 402, exactly what the formula gives.")] },
         { table: { head: ["How you earn rep", "Rep", "Limit"],
                    rows: [["Successful bypass or crack", "Up to ~105, more on tougher targets", "Once per victim per type per 24h"],
                           ["Download or upload", "5 (+10 with Proxy on)", "Once per victim per type per 24h"],
@@ -343,6 +349,12 @@
     },
     {
       id: "console", title: "🔎 Using this console", items: [
+        { text: "Copy the text from any of these game screens and paste it into the console. Names and IPs are blurred here for privacy.", source: "app" },
+        { shots: [
+            SHOT("home", "A target's Home screen", "Target's Home: IP, username, clan, level, device, network, Firewall, Encryptor"),
+            SHOT("apps", "A target's Apps screen", "Target's Apps: their software levels"),
+            SHOT("log", "Your log screen", "A log (yours or a target's): accesses, transfers, steals")
+          ] },
         { list: [
             "Paste victim logs, a victim Home screen, or a victim Software screen, then press Process data.",
             "Filter: Firewall Lv.10 · Bypasser 9 · 27.61.93.149 (space = AND, | = OR).",
@@ -421,7 +433,7 @@
     },
     {
       id: "store", title: "Store price & Keygen fee",
-      fields: [["app", "Software", "Spam", { type: "select", options: Object.keys(STORE_APPS) }], ["have", "Level you have", 15], ["lvl", "Level you want", 20]],
+      fields: [["app", "Software", "Spam", { type: "select", options: Object.keys(STORE_APPS) }], ["have", "Level you have (as shown, incl. bonus)", 15], ["lvl", "Level you want", 20]],
       run: (v) => {
         const [base, def] = STORE_APPS[v.app];
         const price = E.storePrice(base, v.lvl, !!def);
@@ -457,12 +469,22 @@
     return `<span class="kb-src" style="color:${s.color};border-color:${s.color}66;background:${s.color}14" title="${esc(s.tip)}">${s.label}</span>`;
   }
   function itemText(it) {
-    const parts = [it.text || it.tip || it.warn || ""];
+    const parts = [it.text || it.tip || it.warn || "", ...(it.shots || []).map((sh) => sh.caption || "")];
     if (it.list) parts.push(...it.list);
     if (it.table) parts.push(it.table.head.join(" "), it.table.caption || "", ...it.table.rows.map((r) => r.join(" ")));
     return parts.join(" ").toLowerCase();
   }
+  // Game screenshots: { shots: [{ src, alt, caption }] }, shown side by side and opening full size on tap.
+  function renderShots(shots) {
+    const one = shots.length === 1;
+    return `<div class="kb-shots ${one ? "kb-shots-one" : ""}">` + shots.map((sh) =>
+      `<figure class="kb-shot"><a href="${esc(sh.src)}" target="_blank" rel="noopener" title="Open full size">` +
+      `<img src="${esc(sh.src)}" alt="${esc(sh.alt)}" loading="lazy"></a>` +
+      (sh.caption ? `<figcaption>${esc(sh.caption)}</figcaption>` : "") + `</figure>`
+    ).join("") + `</div>`;
+  }
   function renderItem(it) {
+    if (it.shots) return renderShots(it.shots);
     if (it.tip) return `<div class="kb-tip"><span class="kb-tip-label">Tip</span>${esc(it.tip)}</div>`;
     if (it.warn) return `<div class="kb-warn"><span class="kb-warn-label">Note</span>${esc(it.warn)}</div>`;
     let body = "";
