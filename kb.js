@@ -401,7 +401,8 @@ const SHOT = (name, alt, caption) => ({ src: `docs/kb/${name}.webp`, alt, captio
     },
     {
       id: "console", title: "🔎 Using this console", items: [
-        { text: "Copy the text from any of these game screens and paste it into the console. Names and IPs are blurred here for privacy.", source: "app" },
+        { shots: [{ src: "docs/demo.gif", alt: "Copying a target's Home screen and pasting it into the console", caption: "Long-press the game screen, Select all, Copy, then paste here and press Process data." }] },
+        { text: "Copy the text from any of these game screens and paste it into the console. Names and IPs are blurred in the screenshots below.", source: "app" },
         { shots: [
             SHOT("home", "A target's Home screen", "Target's Home: IP, username, clan, level, device, network, Firewall, Encryptor"),
             SHOT("apps", "A target's Apps screen", "Target's Apps: their software levels"),

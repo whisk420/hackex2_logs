@@ -6,6 +6,8 @@ Vibecoded to absolute hell
 
 No install, no account, no server. It's one web page that runs in your browser.
 
+**👉 Open it: [whisk420.github.io/hackex2_logs](https://whisk420.github.io/hackex2_logs/)**
+
 ![The console on desktop](docs/screenshot-desktop.png)
 
 ---
@@ -33,6 +35,10 @@ No install, no account, no server. It's one web page that runs in your browser.
 
 ### Use it
 
+Open **[whisk420.github.io/hackex2_logs](https://whisk420.github.io/hackex2_logs/)** on your phone or computer. That's it.
+
+### Run your own copy
+
 1. Download or clone this repo:
    ```bash
    git clone https://github.com/whisk420/hackex2_logs.git
@@ -46,6 +52,8 @@ It's a static site, so any static host works as-is. To host it free on **GitHub 
 ---
 
 ## How it works
+
+<p align="center"><img src="docs/demo.gif" alt="Copying a target's Home screen in HackEx 2, pasting it into the console and processing it" width="300"><br><sub>Copy a target's Home screen, paste it into the console, press Process data.</sub></p>
 
 1. **Set your stats**: Tap **⚙ My Stats** and enter your Bypasser, Password Cracker and Spam levels. Odds and Good Spam use these.
 2. **Copy from the game**: Long-press and copy text from HackEx 2:
