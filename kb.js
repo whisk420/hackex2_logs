@@ -322,7 +322,11 @@
                    rows: [["CPU", "+3% bypass & crack speed", "+15%"], ["NIC", "+3% upload & download speed", "+15%"], ["RAM", "+1 Spam slot", "+5 slots"],
                           ["Uplink", "+1 target per scan", "15 targets"], ["Storage", "+2 member slots", "40 members"]] },
           source: "confirmed" },
-        { text: "Upgrades and daily upkeep come out of the crew treasury, which members top up (up to 2,000 × your level a day, max 50,000). If it runs dry the server goes offline and its buffs pause, but levels are never lost. New members wait 24h before they get buffs.", source: "guide" }
+        { list: [
+            "Upgrades and daily upkeep come out of the crew treasury. Each member can put in up to 2,000 × their level a day, at most 50,000.",
+            "New members wait 24h before they get the server's buffs."
+          ], source: "confirmed" },
+        { text: "If the treasury runs dry the server goes offline and its buffs pause (Spam in RAM slots too), but levels are never lost.", source: "guide" }
       ]
     },
     {
