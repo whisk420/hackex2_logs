@@ -87,6 +87,13 @@
   .kb-table td { @apply border-b border-cyber-border/60 px-3 py-1.5; }
   .kb-table tr:last-child td { @apply border-b-0; }
   .kb-table tbody tr:hover { @apply bg-indigo-950/20; }
+  .kb-shots { @apply grid grid-cols-2 gap-3 sm:grid-cols-3; }
+  .kb-shots-one { @apply grid-cols-1 justify-items-center sm:grid-cols-1; }
+  .kb-shot { @apply m-0 flex w-full flex-col gap-1.5; }
+  .kb-shots-one .kb-shot { @apply max-w-[280px]; }
+  .kb-shot a { @apply block overflow-hidden rounded-lg border border-cyber-border transition hover:border-sky-500/60; }
+  .kb-shot img { @apply block h-auto w-full; }
+  .kb-shot figcaption { @apply text-xs leading-snug text-slate-500; }
   .kb-caption { @apply mt-2 text-xs italic text-slate-500; }
   .kb-tip  { @apply flex gap-2 rounded-lg border border-emerald-900/50 bg-emerald-950/20 p-3 text-sm leading-relaxed text-emerald-100; }
   .kb-warn { @apply flex gap-2 rounded-lg border border-amber-900/50 bg-amber-950/20 p-3 text-sm leading-relaxed text-amber-100; }
