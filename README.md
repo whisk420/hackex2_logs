@@ -1,12 +1,12 @@
-# hackex2_logs
+# DarkIndexWeb
 
 Vibecoded to absolute hell
 
-**hackex2_logs** is the web version of [DarkIndex](https://github.com/whisk420/DarkIndex): a target-intelligence console for the mobile game **HackEx 2**. Paste text from the game and it builds a searchable database of every player you've touched: IPs, usernames, clans, software levels, wallets and how much they're worth to you. Then it tells you who to hit, what to upload and what your odds are.
+**DarkIndexWeb** is the web version of [DarkIndex](https://github.com/whisk420/DarkIndex): a target-intelligence console for the mobile game **HackEx 2**. Paste text from the game and it builds a searchable database of every player you've touched: IPs, usernames, clans, software levels, wallets and how much they're worth to you. Then it tells you who to hit, what to upload and what your odds are.
 
 No install, no account, no server. It's one web page that runs in your browser.
 
-**👉 Open it: [whisk420.github.io/hackex2_logs](https://whisk420.github.io/hackex2_logs/)**
+**👉 Open it: [whisk420.github.io/DarkIndexWeb](https://whisk420.github.io/DarkIndexWeb/)**
 
 ![The console on desktop](docs/screenshot-desktop.png)
 
@@ -35,19 +35,19 @@ No install, no account, no server. It's one web page that runs in your browser.
 
 ### Use it
 
-Open **[whisk420.github.io/hackex2_logs](https://whisk420.github.io/hackex2_logs/)** on your phone or computer. That's it.
+Open **[whisk420.github.io/DarkIndexWeb](https://whisk420.github.io/DarkIndexWeb/)** on your phone or computer. That's it.
 
 ### Run your own copy
 
 1. Download or clone this repo:
    ```bash
-   git clone https://github.com/whisk420/hackex2_logs.git
+   git clone https://github.com/whisk420/DarkIndexWeb.git
    ```
 2. Open `index.html` in any modern browser. That's it.
 
 ### Host it yourself
 
-It's a static site, so any static host works as-is. To host it free on **GitHub Pages**: on GitHub go to **Settings → Pages**, set the source to the `main` branch root, and save. Your copy will be live at `https://<your-username>.github.io/hackex2_logs/` a minute later.
+It's a static site, so any static host works as-is. To host it free on **GitHub Pages**: on GitHub go to **Settings → Pages**, set the source to the `main` branch root, and save. Your copy will be live at `https://<your-username>.github.io/DarkIndexWeb/` a minute later.
 
 ---
 
@@ -115,7 +115,7 @@ Your data never leaves your device.
 ## Project layout
 
 ```text
-hackex2_logs
+DarkIndexWeb
  ├── index.html         # The page: header, stats bar, ingestion, filter, target grid, knowledge base modal
  ├── app.js             # Parsers, IndexedDB database, merging, search, target cards, export/import
  ├── estimator.js       # Game maths: hack odds, Spam income & decay, upload times, wallet income, hardware

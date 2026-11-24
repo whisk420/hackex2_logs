@@ -1,4 +1,5 @@
 // --- 1. IndexedDB Initialization ---
+// Internal names from before the DarkIndexWeb rename. Changing them would lose everyone's saved data.
 const DB_NAME = "TargetAggregatorMasterDB_v4";
 const STORE_NAME = "targets";
 const ARCHIVE_STORE_NAME = "ingestArchive";
@@ -1424,7 +1425,7 @@ document.getElementById("clearBtn").addEventListener("click", () => {
 // --- Export and Import ---
 async function exportDataBundle() {
   const bundle = {
-    format: "target-intelligence-console",
+    format: "target-intelligence-console", // kept so older backups still import
     version: 2,
     exportedAt: new Date().toISOString(),
     targets: await getAllRecords(STORE_NAME),
@@ -1435,7 +1436,7 @@ async function exportDataBundle() {
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = url;
-  link.download = `target_console_${new Date().toISOString().slice(0, 10)}.json`;
+  link.download = `darkindexweb_${new Date().toISOString().slice(0, 10)}.json`;
   document.body.appendChild(link);
   link.click();
   link.remove();
@@ -1445,7 +1446,7 @@ async function exportDataBundle() {
 async function importDataBundle(file) {
   const bundle = JSON.parse(await file.text());
   if (!bundle || bundle.format !== "target-intelligence-console" || ![1, 2].includes(bundle.version)) {
-    throw new Error("This is not a Target Intelligence Console export.");
+    throw new Error("This is not a DarkIndexWeb export.");
   }
 
   const importedTargets = Array.isArray(bundle.targets) ? bundle.targets : [];
