@@ -11,6 +11,7 @@
     calculated: { label: "Calculated", color: "#38bdf8", tip: "Worked out from a formula that reproduces the measured or guide numbers" },
     guide:      { label: "Guide",      color: "#fbbf24", tip: "From the official hackex.net guide, not yet checked in-game" },
     confirmed:  { label: "Confirmed",  color: "#a3e635", tip: "Confirmed in-game by the DarkIndex developer" },
+    empirical:  { label: "Empirical",  color: "#fb923c", tip: "Older measurement, not re-checked since" },
     unknown:    { label: "Unknown",    color: "#94a3b8", tip: "Not measured yet" },
     app:        { label: "This app",   color: "#c084fc", tip: "How this website behaves" }
   };
@@ -23,6 +24,8 @@
     Spam: [1800, 0], Siphon: [1600, 0], Rootkit: [1400, 0], Proxy: [900, 1], Trace: [900, 1], Keygen: [600, 0]
   };
 const SHOT = (name, alt, caption) => ({ src: `docs/kb/${name}.webp`, alt, caption });
+  const CREW_PARTS = [["CPU", 70000], ["NIC", 70000], ["RAM", 120000], ["Uplink", 45000], ["Storage", 60000]];
+  const compact = (v) => (v >= 1e6 ? +(v / 1e6).toFixed(2) + "M" : v >= 1e3 ? +(v / 1e3).toFixed(1) + "K" : String(v));
   const rootkitDebuff = (lvl) => (lvl >= 6 ? 3 : lvl >= 3 ? 2 : lvl >= 1 ? 1 : 0);
   const keyFee = (jump) => Math.min(0.5, 0.15 + (jump - 1) * 0.35 / 19);
 
@@ -40,9 +43,9 @@ const SHOT = (name, alt, caption) => ({ src: `docs/kb/${name}.webp`, alt, captio
         { table: { head: ["Your level − theirs", "Success"],
                    rows: [6, 5, 4, 3, 2, 1, 0, -1, -2, -3, -4].map((d) => [d >= 6 ? "+6 or more" : d <= -4 ? "−4 or less" : (d > 0 ? "+" + d : String(d)), pct(E.hackOdds(d, 0))]) },
           source: "measured" },
+        { text: "A Rootkit on them (yours or a crewmate's) makes their Firewall and Encryptor count 1–3 levels lower; see Rootkit.", source: "measured" },
         { table: { head: ["Modifier", "Effect"],
-                   rows: [["Rootkit on them (yours or a crewmate's)", "Their Firewall and Encryptor count 1–3 levels lower"],
-                          ["Apex device (reboot loadout)", "Your Bypasser and Cracker count +3"],
+                   rows: [["Apex device (reboot loadout)", "Your Bypasser and Cracker count +3"],
                           ["Cipher device (reboot loadout)", "Their Firewall and Encryptor count +3"]],
                    caption: "Modifiers simply add up: Apex +3 against a −3 rootkit is an effective +6." },
           source: "guide" },
@@ -57,6 +60,23 @@ const SHOT = (name, alt, caption) => ({ src: `docs/kb/${name}.webp`, alt, captio
       ]
     },
     {
+      id: "scanning", title: "📡 Scanning & matchmaking", items: [
+        { list: [
+            "Scan Random shows 10 targets near your level, widening the range until the list is full. The usual window is about ±10 levels.",
+            "Each crew-server Uplink level adds 1 target: an Uplink giving +2 shows 12.",
+            "Players with Proxy on still appear, with their IP masked.",
+            "Your level decides who you see: levelling up shows you tougher players."
+          ], source: "confirmed" },
+        { list: [
+            "Players with Stealth on never appear in random scans, though anyone with their IP can still look them up.",
+            "The Ghost reboot device hides the last part of its IP in scans even without Proxy.",
+            "The Apex reboot shows each target's Encryptor level in scans, not just their Firewall."
+          ], source: "guide" },
+        { text: "Exactly how far above and below your level a scan reaches.", source: "unknown" },
+        { tip: "For Spam, any victim Lv 27 or higher pays the full ₵100/hr with Spam Lv 17. Look for low Firewalls among them." }
+      ]
+    },
+    {
       id: "spam", title: "📧 Spam", items: [
         { text: "Spam is your main passive income: up to ₵100/hr from each victim it's on. Income builds up continuously and you collect it whenever you like.", source: "confirmed" },
         { text: "What decides the rate is the victim's level compared with the Spam's level. Your own level plays no part. A victim well above the Spam level pays more; a Spam above the victim's level pays less.", source: "measured" },
@@ -66,7 +86,7 @@ const SHOT = (name, alt, caption) => ({ src: `docs/kb/${name}.webp`, alt, captio
                    caption: "₵/hr for a fresh upload. Matches all 17 in-game measurements." },
           source: "calculated" },
         { tip: "On victims Lv 28+, Spam Lv 16 pays ₵99/hr and uploads faster than Lv 17, the lowest level that hits the full ₵100." },
-        { tip: "On low-level victims don't upload your highest Spam: it earns less and takes longer. The Spam chip on each card shows the best level for that target." },
+        { tip: "On low-level victims don't upload your highest Spam: it earns less and takes longer. The Spam chip on each card shows the best level for that target and how long it takes to upload." },
         { text: "Decay: every Spam slowly loses income. Full rate for 21 days, then a steady drop to 10% at day 100. A fresh upload resets the clock.", source: "guide" },
         { table: { head: ["Day", "Income kept"], rows: [1, 21, 30, 50, 70, 100].map((d) => [d, pct(Math.round(E.spamDecayFactor(d) * 100))]) },
           source: "guide" },
@@ -90,7 +110,8 @@ const SHOT = (name, alt, caption) => ({ src: `docs/kb/${name}.webp`, alt, captio
     },
     {
       id: "siphon", title: "🩸 Siphon", items: [
-        { text: "A Siphon skims a cut of crypto coming into the victim's hot wallet, mainly what they steal from other players. Spam collections don't appear to be skimmed.", source: "confirmed" },
+        { text: "A Siphon skims a cut of crypto coming into the victim's hot wallet.", source: "guide" },
+        { text: "Exactly which income it skims is still open. Play suggests only what the victim steals from other players, and Spam collections don't seem to be skimmed, but that hasn't been re-checked with a fresh Siphon and the guide contradicts itself.", source: "unknown" },
         { table: { head: ["Siphon Lv", "Cut"], rows: [1, 2, 5, 6, 10, 13, 15, 17, 20, 21, 25].map((l) => ["Lv " + l, pct(E.siphonPercent(l))]),
                    caption: "Goes up 0.25% per level and stops at 6% from Lv 21." },
           source: "measured" },
@@ -136,8 +157,11 @@ const SHOT = (name, alt, caption) => ({ src: `docs/kb/${name}.webp`, alt, captio
         { table: { head: ["Victim device", "Lv 20 upload on DSL"],
                    rows: [["Raider, Raider II, Raider III", E.formatDuration(E.UPLOAD_BASE_SECONDS[0])],
                           ...E.DEVICES.slice(3).map((d, i) => [d, E.formatDuration(E.UPLOAD_BASE_SECONDS[i + 1])])],
-                   caption: "Divide by your network's speed (see Devices & networks). Lower virus levels are much faster: Lv 10 takes about a fifth of Lv 20." },
-          source: "measured" },
+                   caption: "From one older benchmark (a Lv 20 virus on a 15× network). Divide by your network's speed (see Devices & networks)." },
+          source: "empirical" },
+        { text: "Raider, Raider II and Raider III are all equally quick to upload to.", source: "confirmed" },
+        { text: "Lower virus levels upload much faster: Lv 10 takes about a fifth as long as Lv 20, Lv 15 about half.", source: "measured" },
+        { text: "How long downloads take by software level isn't known yet.", source: "unknown" },
         { list: [
             "Uploads and downloads slow each other down; bypasses and cracks don't affect them.",
             "Each extra transfer running adds 75% to the time.",
@@ -153,9 +177,9 @@ const SHOT = (name, alt, caption) => ({ src: `docs/kb/${name}.webp`, alt, captio
                    rows: [5, 3, 2, 1, 0, -1, -2, -3, -5, -9].map((d) => [d >= 5 ? "+5 or more" : d <= -9 ? "−9 or less" : (d > 0 ? "+" + d : String(d)), pct(E.avRemovalPercent(d, 0))]) },
           source: "guide" },
         { text: "Your device sets how long a scan takes. Scans share the processor with bypasses and cracks, so hacking at the same time slows them.", source: "guide" },
-        { table: { head: ["Device", "Scan time"], rows: [["Raider", "3h"], ["Raider III", "2h"], ["Bolt II", "1h 30m"], ["Nova II", "~1h 03m"], ["Nova S", "~53m"], ["Nova Ultra", "45m"]],
-                   caption: "The guide's own text and table disagree slightly for Nova II and up." },
+        { table: { head: ["Device", "Scan time"], rows: [["Raider", "3h"], ["Raider III", "2h"], ["Bolt II", "1h 30m"], ["Nova II", "~1h 03m"], ["Nova S", "~53m"], ["Nova Ultra", "45m"]] },
           source: "guide" },
+        { text: "Scan times on Nova II, Nova S and Nova Ultra are unconfirmed: the guide's text and table disagree by a few minutes.", source: "unknown" },
         { list: [
             "Each removal gives back 90% of the reputation that virus cost you.",
             "Viruses from a Harvest Node attacker count 2 levels higher against your AV.",
@@ -208,7 +232,7 @@ const SHOT = (name, alt, caption) => ({ src: `docs/kb/${name}.webp`, alt, captio
         { shots: [SHOT("log", "Your log screen", "Your log. The xxx lines are a target with Proxy on; the box is editable, hence SAVE. Real IPs blurred.")] },
         { list: [
             "Logs keep only the last 100 lines, graffiti and messages included. Paste them here often or steals fall off the end.",
-            "Times are UTC, written as [M-D H:MM], newest first.",
+            "Times are UTC, written as [M-D H:MM]. Newest first, but not strictly in time order: each line carries the time the device was accessed, so a [16:38] line can sit below [17:40] lines.",
             "Anyone who has bypassed a device can edit its log, so odd lines in victim logs may be fake. Log Lock blocks editing for 8h."
           ], source: "confirmed" },
         { table: { head: ["Line", "Where", "Means"],
@@ -220,7 +244,7 @@ const SHOT = (name, alt, caption) => ({ src: `docs/kb/${name}.webp`, alt, captio
                           ["Backdoor blocked by <ip>'s firewall", "Your log", "Hardening blocked you"]] },
           source: "confirmed" },
         { list: [
-            "The game sometimes skips an 'accessed' line, so two steals can follow one access. This app only links a wallet to an IP when the steal comes within 2 minutes of the access.",
+            "A steal is linked to the last access only if it's within 3 minutes of it, and only the first steal after an access counts. The game sometimes skips an 'accessed' line, so a second steal in a row stays unlinked rather than handing one target another's wallet.",
             "A [UNKNOWN] attacker is using the Ghost reboot loadout."
           ], source: "app" }
       ]
@@ -263,6 +287,8 @@ const SHOT = (name, alt, caption) => ({ src: `docs/kb/${name}.webp`, alt, captio
         { table: { head: ["Level", "Cold storage cap"], rows: [[1, "3,000"], [5, "8,841"], [10, "29,124"], [20, "121,891"], [30, "294,147"], [36, "439,280"]],
                    caption: "Lv 36 confirmed in-game; the rest from the guide. Mission, streak, ad and Crypto Stash rewards go to cold storage even past the cap." },
           source: "guide" },
+        { text: "There's no minimum or maximum per steal: you can take a whole hot wallet in one go.", source: "confirmed" },
+        { text: "There seems to be a daily steal limit; the amount isn't known.", source: "unknown" },
         { text: "Crypto → Credits: 250 crypto buys 1 Credit. Minimum 5 Credits per exchange, at most 750 Credits a month (resets on the 1st, UTC). It takes from your hot wallet first, then cold storage.", source: "guide" },
         { text: "Credits → Crypto: the Black Market's Crypto Stash sells 10,000 crypto for 100 Credits and 40,000 for 400 Credits, each once a day. It goes straight to cold storage, so it can't be stolen or siphoned on the way.", source: "guide" },
         { tip: "Move crypto to cold storage right after every steal: tap the Wallet badge at the top of any page." },
@@ -270,7 +296,7 @@ const SHOT = (name, alt, caption) => ({ src: `docs/kb/${name}.webp`, alt, captio
         { table: { head: ["Level", "XP to next level"], rows: [[1, "589"], [5, "2,605"], [10, "5,919"], [20, "14,209"], [30, "24,079"], [35, "29,484"], [36, "30,599"], [38, "32,860"], [44, "39,888"]],
                    caption: "Lv 35, 36, 38 and 44 confirmed in-game." },
           source: "guide" },
-        { text: "Software (Store or Keygen) gives about 0.17 XP per crypto of its Store price; devices give 0.25 XP per crypto.", source: "measured" },
+        { text: "Software (Store or Keygen) gives about 0.17 XP per crypto of its Store price; your current device or network line gives 0.25 XP per crypto, older hardware 0.20.", source: "measured" },
         { text: "Each level gives +10 Overclocks, +10 Credits and a bigger cold storage cap.", source: "guide" },
         { tip: "Levelling up makes scans show you tougher players. Spend on what you actually use (Bypasser, Cracker, Spam, Keygen, device) rather than upgrading everything for XP." }
       ]
@@ -293,6 +319,7 @@ const SHOT = (name, alt, caption) => ({ src: `docs/kb/${name}.webp`, alt, captio
         { table: { head: ["Your software − theirs", "Rep you get"], rows: [["+5 or less", "100%"], ["+6", "80%"], ["+7", "60%"], ["+8", "40%"], ["+9", "20%"], ["+10 or more", "0%"]],
                    caption: "The guide only says it falls off steadily; the exact steps are assumed." },
           source: "guide" },
+        { text: "The exact rep a bypass or crack gives isn't known yet; the guide only says it scales with their defence, up to about 105.", source: "unknown" },
         { table: { head: ["Virus that lands on you", "Rep lost"], rows: [1, 5, 10, 15, 20].map((l) => ["Lv " + l, "−" + E.repLossFromVirus(l)]) },
           source: "guide" },
         { list: [
@@ -303,7 +330,7 @@ const SHOT = (name, alt, caption) => ({ src: `docs/kb/${name}.webp`, alt, captio
       ]
     },
     {
-      id: "daily", title: "📅 Missions & streaks", items: [
+      id: "daily", title: "📅 Missions, streaks & passes", items: [
         { table: { head: ["Mission", "XP", "Rep", "Reward", "Spawn chance"],
                    rows: [["Easy", 100, 30, "250 crypto or 3 OC", "80%"], ["Medium", 150, 55, "500 crypto or 7 OC", "50%"], ["Hard", 200, 90, "1,000 crypto or 15 OC", "20%"]],
                    caption: "Hacking missions (bypass, crack, download) pay crypto; upload missions (Spam, Siphon, Rootkit) pay Overclocks." },
@@ -314,7 +341,11 @@ const SHOT = (name, alt, caption) => ({ src: `docs/kb/${name}.webp`, alt, captio
                           [5, "1,000 crypto", "2,000 crypto"], [6, "10 OC", "20 OC"], [7, "15 Credits", "30 Credits"]],
                    caption: "Miss a day and it starts again from day 1." },
           source: "guide" },
-        { text: "Watch & Earn (Store → Credits tab): 12 ads a day, 4 for each reward. Each pays 3 Credits, 250 crypto or 5 Overclocks.", source: "guide" }
+        { text: "Watch & Earn (Store → Credits tab): 12 ads a day, 4 for each reward. Each pays 3 Credits, 250 crypto or 5 Overclocks.", source: "guide" },
+        { table: { head: ["", "Hacker Pass", "Elite Pass"],
+                   rows: [["Price", "$4.99/month", "$9.99/month"], ["Every day", "5 Credits, 5 OC, 500 crypto", "10 Credits, 10 OC, 1,000 crypto"],
+                          ["Spam fee", "−25%", "−50%"], ["Pause & resume", "Bypasses and cracks", "Any process"], ["Also", "Weekly consumables, double login streak", "More drops, double login streak"]] },
+          source: "guide" }
       ]
     },
     {
@@ -332,19 +363,40 @@ const SHOT = (name, alt, caption) => ({ src: `docs/kb/${name}.webp`, alt, captio
             "Upgrades and daily upkeep come out of the crew treasury. Each member can put in up to 2,000 × their level a day, at most 50,000.",
             "New members wait 24h before they get the server's buffs."
           ], source: "confirmed" },
-        { text: "If the treasury runs dry the server goes offline and its buffs pause (Spam in RAM slots too), but levels are never lost.", source: "guide" }
+        { text: "If the treasury runs dry the server goes offline and its buffs pause (Spam in RAM slots too), but levels are never lost.", source: "guide" },
+        { text: "Server costs below were checked against a crew's full server log, to the crypto.", source: "measured" },
+        { table: { head: ["Part", "Lv 1", "Lv 2", "Lv 3", "Lv 4", "Lv 5"],
+                   rows: CREW_PARTS.map(([p, b]) => [p, ...[1, 2, 3, 4, 5].map((k) => compact(b * k * k))]),
+                   caption: "Price to upgrade a part to each level." },
+          source: "measured" },
+        { table: { head: ["Part", "Lv 1", "Lv 2", "Lv 3", "Lv 4", "Lv 5"],
+                   rows: CREW_PARTS.filter(([p]) => p !== "Storage").map(([p, b]) => [p, ...[1, 2, 3, 4, 5].map((L) => fmt(b * 0.005 * L * (L + 1) * (2 * L + 1) / 6))]),
+                   caption: "Upkeep per day: 0.5% of everything spent on that part. Storage has none, and a switched-off part costs nothing. Billed about once a day for the hours since the last charge." },
+          source: "measured" },
+        { text: "A surge gives CPU, NIC or Uplink +2 levels for 6, 12 or 24 hours (12h is 5% off, 24h is 10% off). Extending costs the same as starting a new surge; ending early gives no refund.", source: "measured" },
+        { table: { head: ["Surge on", "6h", "12h", "24h"],
+                   rows: [["CPU", 70000], ["NIC", 70000], ["Uplink", 45000]].flatMap(([p, b]) => [1, 3, 5].map((L) =>
+                     [`${p} at Lv ${L}`, ...[[6, 0], [12, 0.05], [24, 0.1]].map(([h, d]) => fmt(b * ((L + 1) ** 2 + (L + 2) ** 2) * h / 1200 * (1 - d)))])),
+                   caption: "In crypto. Other levels: the price of the next two levels × hours ÷ 1,200." },
+          source: "measured" }
       ]
     },
     {
       id: "reboot", title: "♻️ Reboot loadouts", items: [
         { text: "From Lv 50 you can reboot: your run resets for a loadout with permanent perks. Several tools here mention these perks.", source: "guide" },
+        { table: { head: ["Reset", "Kept"],
+                   rows: [["Level (to 1) and rep", "R-tier and badges"], ["Software (back to starter)", "Credits, Overclocks and inventory"], ["Crypto and botnet", "Notepad and Message Encryptor"],
+                          ["Your Siphons, Rootkits and cracks", "Your crew"], ["Processes and your IP", "Lifetime score and this month's leaderboard progress"]] },
+          source: "guide" },
+        { text: "R1 to R5 must each use a different loadout. From R6 you can mix any device line with any network line.", source: "guide" },
         { table: { head: ["Loadout", "Device perk", "Network perk"],
-                   rows: [["Ghost", "[UNKNOWN] in logs, can't be Traced", "Proxy lasts twice as long, +5 vs Trace"],
+                   rows: [["Ghost", "[UNKNOWN] in logs, can't be Traced", "Proxy lasts twice as long, +5 vs Trace, Stealth refills 1h per hour off"],
                           ["Vector", "Half-price Overclocks on hacks, 50% chance to keep consumables", "Half-price Overclocks on transfers, a free consumable daily"],
                           ["Scythe", "Siphons earn double, Spam loses income half as fast", "Harvest Node: uploads twice as fast, your viruses +2 vs AV"],
                           ["Cipher", "Your Firewall and Encryptor +3", "Blocks every Backdoor and Exploit Kit"],
                           ["Apex", "Your Bypasser and Cracker +3", "Scans show Encryptor levels, downloads 40% faster"]] },
-          source: "guide" }
+          source: "guide" },
+        { text: "Reboot hardware (e.g. Apex VII, Null Route IX) is as fast as the standard item at the same level. This app reads those names, so upload times work for reboot players too.", source: "measured" }
       ]
     },
     {
@@ -362,7 +414,7 @@ const SHOT = (name, alt, caption) => ({ src: `docs/kb/${name}.webp`, alt, captio
             "Short names search ±2 levels: fw 12, enc 10, av 8, bp 9, pc 9, rk 5. Full names are exact: Spam 17, Firewall Lv.12.",
             "Prefixes: user:, clan:, wallet:, hw:. Any other word matches username, clan, wallet, hardware, IP or app.",
             "Missing data (Advanced targeting) shows only real targets missing a wallet, Bypasser, Firewall or Password Encryptor.",
-            "Good Spam ranks targets by Spam ₵/hr using your Spam level from ⚙ My Stats.",
+            "Good Spam ranks targets by Spam ₵/hr, then fastest upload, then lowest Firewall. Set your Spam level and network in ⚙ My Stats.",
             "Wallet income: each wallet's steals are grouped into sessions (a gap over 1 hour starts a new one) and averaged into ₵/hr."
           ], source: "app" }
       ]
@@ -501,7 +553,7 @@ const SHOT = (name, alt, caption) => ({ src: `docs/kb/${name}.webp`, alt, captio
     return `<h3 class="border-b border-cyber-border pb-3 font-mono text-lg font-bold text-indigo-300">${esc(title)}</h3>`;
   }
   const legend = () =>
-    `<div class="flex flex-wrap items-center gap-1.5 pt-2 font-mono text-[10px] text-slate-500">Sources: ${["measured", "confirmed", "calculated", "guide", "app"].map(badge).join("")}</div>`;
+    `<div class="flex flex-wrap items-center gap-1.5 pt-2 font-mono text-[10px] text-slate-500">Sources: ${["measured", "confirmed", "calculated", "empirical", "guide", "unknown", "app"].map(badge).join("")}</div>`;
 
   // ---- Calculators view ----
   function calculatorsHtml() {
