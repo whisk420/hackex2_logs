@@ -1,5 +1,5 @@
 {
-  "name": "hackex2_logs",
+  "name": "darkindexweb",
   "private": true,
   "description": "Static site. style.css is compiled from src/tailwind.css and committed, so no build is needed to host it.",
   "scripts": {
