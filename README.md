@@ -1,6 +1,6 @@
 # hackex2_logs
 
-Vibecoded to absolute hell, and somehow it works.
+Vibecoded to absolute hell
 
 **hackex2_logs** is the web version of [DarkIndex](https://github.com/whisk420/DarkIndex): a target-intelligence console for the mobile game **HackEx 2**. Paste text from the game and it builds a searchable database of every player you've touched: IPs, usernames, clans, software levels, wallets and how much they're worth to you. Then it tells you who to hit, what to upload and what your odds are.
 
